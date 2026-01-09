@@ -159,6 +159,69 @@ def process_companies_with_users(raw_companies, final_output_file):
     save_to_csv(final_output_file, raw_companies)
 
 
+def add_new_company(
+        title,  # Nazwa firmy (Wymagane)
+        nip=None,  # Twój custom field: UF_CRM_78FF9738
+        phone=None,  # Telefon
+        email=None,  # E-mail
+        website=None,  # WWW
+        industry=None,  # Branża (kod, np. IT, MANUFACTURING)
+        company_type=None,  # Typ firmy (kod, np. CUSTOMER, PARTNER)
+        assigned_by_id=None,  # ID osoby odpowiedzialnej (np. 183)
+        comments=None  # Komentarze
+):
+    """
+    Tworzy nową firmę w Bitrix24.
+    """
+    print(f"🚀 Wysyłam dane dla firmy: {title}...")
+
+    # Budowanie struktury 'fields'
+    fields = {
+        "TITLE": title,
+        "OPENED": "Y"  # Dostępna dla wszystkich (opcjonalne)
+    }
+
+    # Pole niestandardowe NIP
+    if nip:
+        fields["UF_CRM_78FF9738"] = nip
+
+    # Pola proste (Słownikowe)
+    # UWAGA: Bitrix wymaga tutaj KODU (np. "IT"), a nie polskiej nazwy ("Informatyka").
+    if industry:
+        fields["INDUSTRY"] = industry
+    if company_type:
+        fields["COMPANY_TYPE"] = company_type
+
+    # Osoba odpowiedzialna (musi to być ID numeryczne użytkownika, np. 1, 15, 183)
+    if assigned_by_id:
+        fields["ASSIGNED_BY_ID"] = assigned_by_id
+
+    # Komentarz (HTML lub tekst)
+    if comments:
+        fields["COMMENTS"] = comments
+
+    # Pola wielokrotne (Telefon, Email, Web) wymagają specjalnej struktury listy
+    if phone:
+        fields["PHONE"] = [{"VALUE": phone, "VALUE_TYPE": "WORK"}]
+
+    if email:
+        fields["EMAIL"] = [{"VALUE": email, "VALUE_TYPE": "WORK"}]
+
+    if website:
+        fields["WEB"] = [{"VALUE": website, "VALUE_TYPE": "WORK"}]
+
+    # Wywołanie API
+    # Używamy metody crm.company.add
+    result = bitrix_call(config.WEBHOOK_URL, "crm.company.add.json", {"fields": fields})
+
+    if "result" in result:
+        new_id = result["result"]
+        print(f"✅ Sukces! Dodano nową firmę. ID: {new_id}")
+        return new_id
+    else:
+        print(f"❌ Błąd podczas dodawania firmy: {result}")
+        return None
+
 def save_to_csv(filename, rows):
     if not rows:
         print("Brak danych do zapisu.")
@@ -185,14 +248,39 @@ def save_to_csv(filename, rows):
 # --- MAIN ---
 
 def main():
-    FILE_FINAL = "companies_full_export.csv"
+    print("--- BITRIX INTEGRATION ---")
+    print("1. Pobierz wszystkie firmy do CSV (Export)")
+    print("2. Dodaj nową firmę (Import)")
 
-    companies_data = fetch_all_companies_optimized()
+    choice = input("Wybierz opcję (1/2): ").strip()
 
-    if companies_data:
-        process_companies_with_users(companies_data, FILE_FINAL)
+    if choice == "1":
+        FILE_FINAL = "companies_full_export.csv"
+        companies_data = fetch_all_companies_optimized()
+        if companies_data:
+            process_companies_with_users(companies_data, FILE_FINAL)
+
+    elif choice == "2":
+        # --- PRZYKŁAD DANYCH DO DODANIA ---
+        # Możesz te dane pobrać np. z innego pliku CSV lub input()
+
+        # UWAGA: Branża i Typ Firmy wymagają kodów systemowych (np. IT, MANUFACTURING), a nie polskich nazw.
+        # Aby poznać swoje kody, trzeba użyć metody crm.status.list
+
+        add_new_company(
+            title="Nowa Firma Testowa S.A.",
+            nip="1234567890",  # Twoje pole UF_CRM_...
+            phone="600 100 200",
+            email="kontakt@firma-testowa.pl",
+            website="https://firma-testowa.pl",
+            industry="IT",  # Przykładowy kod branży
+            company_type="CUSTOMER",  # Przykładowy typ (Klient)
+            assigned_by_id=1,  # ID Opiekuna (musi być liczbą/ID usera)
+            comments="Firma dodana przez skrypt Python."
+        )
+
     else:
-        print("Nie udało się pobrać żadnych firm.")
+        print("Nieprawidłowy wybór.")
 
 
 if __name__ == "__main__":
