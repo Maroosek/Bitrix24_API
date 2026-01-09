@@ -70,6 +70,28 @@ def flatten_multifield(field):
         return ""
     return "; ".join(f"{f.get('VALUE')} ({f.get('VALUE_TYPE')})" for f in field)
 
+def fetch_all_users():
+    users = []
+    start = 0
+    while True:
+        r = requests.get(
+            f"{config.WEBHOOK_URL_USER_GET}user.get.json",
+            params={"start": start}
+        ).json()
+
+        if "error" in r:
+            print("Error fetching users:", r)
+            break
+
+        batch = r.get("result", [])
+        users.extend(batch)
+
+        if "next" not in r:
+            break
+        start = r["next"]
+
+    return users
+
 # Save CSV
 def save_to_csv(filename, rows):
     if not rows:
@@ -88,31 +110,34 @@ def main():
 
     #replace_created_by_id(old_id=183, new_value="Jakub Janczak")
 
-    basic_companies = fetch_basic_companies(config.MAX_RECORDS, 0)
-    save_to_csv(config.OUTPUT_BASIC, basic_companies)
+    bitrix_users = fetch_all_users()
+    save_to_csv(config.OUTPUT_USERS, bitrix_users)
 
-    # Step 2: fetch full in parallel if HAS_PHONE or HAS_EMAIL
-    full_rows = []
-
-    # Prepare list of IDs that need full fetch
-    ids_to_fetch = [c["ID"] for c in basic_companies if c.get("HAS_PHONE") == "Y" or c.get("HAS_EMAIL") == "Y"]
-
-    with ThreadPoolExecutor(max_workers=config.MAX_WORKERS) as executor:
-        future_to_id = {executor.submit(fetch_full_company, cid): cid for cid in ids_to_fetch}
-        for future in as_completed(future_to_id):
-            full = future.result()
-            # Flatten fields
-            full["PHONE"] = flatten_multifield(full.get("PHONE"))
-            full["EMAIL"] = flatten_multifield(full.get("EMAIL"))
-            full["WEB"] = flatten_multifield(full.get("WEB"))
-            full_rows.append(full)
-
-    # Add companies with no phone/email as basic info
-    no_phone_email = [c for c in basic_companies if c.get("HAS_PHONE") != "Y" and c.get("HAS_EMAIL") != "Y"]
-    full_rows.extend(no_phone_email)
-
-    save_to_csv(config.OUTPUT_FULL, full_rows)
-    print(f"Done! Total companies processed: {len(full_rows)}")
+    # basic_companies = fetch_basic_companies(config.MAX_RECORDS, 0)
+    # save_to_csv(config.OUTPUT_BASIC, basic_companies)
+    #
+    # # Step 2: fetch full in parallel if HAS_PHONE or HAS_EMAIL
+    # full_rows = []
+    #
+    # # Prepare list of IDs that need full fetch
+    # ids_to_fetch = [c["ID"] for c in basic_companies if c.get("HAS_PHONE") == "Y" or c.get("HAS_EMAIL") == "Y"]
+    #
+    # with ThreadPoolExecutor(max_workers=config.MAX_WORKERS) as executor:
+    #     future_to_id = {executor.submit(fetch_full_company, cid): cid for cid in ids_to_fetch}
+    #     for future in as_completed(future_to_id):
+    #         full = future.result()
+    #         # Flatten fields
+    #         full["PHONE"] = flatten_multifield(full.get("PHONE"))
+    #         full["EMAIL"] = flatten_multifield(full.get("EMAIL"))
+    #         full["WEB"] = flatten_multifield(full.get("WEB"))
+    #         full_rows.append(full)
+    #
+    # # Add companies with no phone/email as basic info
+    # no_phone_email = [c for c in basic_companies if c.get("HAS_PHONE") != "Y" and c.get("HAS_EMAIL") != "Y"]
+    # full_rows.extend(no_phone_email)
+    #
+    # save_to_csv(config.OUTPUT_FULL, full_rows)
+    # print(f"Done! Total companies processed: {len(full_rows)}")
 
 if __name__ == "__main__":
     main()
