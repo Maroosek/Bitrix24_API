@@ -1,7 +1,6 @@
 import requests
 import csv
 import time
-import sys
 from config import config
 
 # Parametry SELECT
@@ -57,7 +56,6 @@ def bitrix_call(webhook_url, method, params=None):
                 print("❌ Błąd krytyczny: Nie udało się połączyć po wszystkich próbach.")
                 return {"error": str(e)}
 
-
 # --- KROK 1: Pobieranie Firm (Logika stronicowania) ---
 
 def fetch_all_companies_optimized():
@@ -103,7 +101,6 @@ def fetch_all_companies_optimized():
 
     return all_companies
 
-
 # --- KROK 2: Pobieranie Użytkowników i aktualizacja CSV ---
 
 def fetch_all_users():
@@ -132,7 +129,6 @@ def fetch_all_users():
         start = r["next"]
 
     return users
-
 
 # --- Pobieranie dostępnych pól i aktualizacja CSV ---
 
@@ -188,94 +184,33 @@ def process_companies_with_users(raw_companies, final_output_file):
     save_to_csv(final_output_file, raw_companies)
 
 
-# def add_new_company(
-#         title,  # Nazwa firmy (Wymagane)
-#         nip=None,  # Twój custom field: UF_CRM_78FF9738
-#         phone=None,  # Telefon
-#         email=None,  # E-mail
-#         website=None,  # WWW
-#         industry=None,  # Branża (kod, np. IT, MANUFACTURING)
-#         company_type=None,  # Typ firmy (kod, np. CUSTOMER, PARTNER)
-#         assigned_by_id=None,  # ID osoby odpowiedzialnej (np. 183)
-#         comments=None  # Komentarze
-# ):
-#     """
-#     Tworzy nową firmę w Bitrix24.
-#     """
-#     print(f"🚀 Wysyłam dane dla firmy: {title}...")
+# def normalise_field_names():
 #
-#     # Budowanie struktury 'fields'
-#     fields = {
-#         "TITLE": title,
-#         "OPENED": "Y"  # Dostępna dla wszystkich (opcjonalne)
-#     }
-#
-#     # Pole niestandardowe NIP
-#     if nip:
-#         fields["UF_CRM_78FF9738"] = nip
-#
-#     # Pola proste (Słownikowe)
-#     # UWAGA: Bitrix wymaga tutaj KODU (np. "IT"), a nie polskiej nazwy ("Informatyka").
-#     if industry:
-#         fields["INDUSTRY"] = industry
-#
-#     if company_type:
-#         fields["COMPANY_TYPE"] = company_type
-#
-#     # Osoba odpowiedzialna (musi to być ID numeryczne użytkownika, np. 1, 15, 183)
-#     if assigned_by_id:
-#         fields["ASSIGNED_BY_ID"] = assigned_by_id
-#
-#     # Komentarz (HTML lub tekst)
-#     if comments:
-#         fields["COMMENTS"] = comments
-#
-#     # Pola wielokrotne (Telefon, Email, Web) wymagają specjalnej struktury listy
-#     if phone:
-#         fields["PHONE"] = [{"VALUE": phone, "VALUE_TYPE": "WORK"}]
-#
-#     if email:
-#         fields["EMAIL"] = [{"VALUE": email, "VALUE_TYPE": "WORK"}]
-#
-#     if website:
-#         fields["WEB"] = [{"VALUE": website, "VALUE_TYPE": "WORK"}]
-#
-#     # Wywołanie API
-#     # Używamy metody crm.company.add
-#     result = bitrix_call(config.WEBHOOK_URL, "crm.company.add.json", {"fields": fields})
-#
-#     if "result" in result:
-#         new_id = result["result"]
-#         print(f"✅ Sukces! Dodano nową firmę. ID: {new_id}")
-#         return new_id
-#     else:
-#         print(f"❌ Błąd podczas dodawania firmy: {result}")
-#         return None
+
 
 def add_new_company_v2(
-        title,  # Nazwa firmy (Wymagane)
-        nip=None,  # Twój custom field: UF_CRM_78FF9738
-        phone=None,  # Telefon
-        email=None,  # E-mail
-        website=None,  # WWW
-        industry=None,  # Branża (kod, np. IT, MANUFACTURING)
-        company_type=None,  # Typ firmy (kod, np. CUSTOMER, PARTNER)
-        city=None,
-        province=None,
-        full_address=None,
-        assigned_by_id=None,  # ID osoby odpowiedzialnej (np. 183)
-        comments=None  # Komentarze
+    title,  # Nazwa firmy (Wymagane)
+    nip=None,  # Twój custom field: UF_CRM_78FF9738
+    phone=None,  # Telefon
+    email=None,  # E-mail
+    website=None,  # WWW
+    industry=None,  # Branża (kod, np. IT, MANUFACTURING)
+    company_type=None,  # Typ firmy (kod, np. CUSTOMER, PARTNER)
+    city=None,
+    #province=None,
+    postal_code=None,
+    address=None,
+    assigned_by_id=None,  # ID osoby odpowiedzialnej (np. 183)
+    comments=None  # Komentarze
 ):
     """
     Tworzy nową firmę w Bitrix24.
     """
     print(f"🚀 Wysyłam dane dla firmy: {title}...")
 
-    full_address = full_address + ", " + city + ", " + province
-
     # Budowanie struktury 'fields'
     fields = {
-        "TITLE": title,
+        "TITLE": title + " - " + nip,
         "OPENED": "Y"  # Dostępna dla wszystkich (opcjonalne)
     }
 
@@ -292,13 +227,13 @@ def add_new_company_v2(
         fields["COMPANY_TYPE"] = company_type
 
     if city:
-        fields["UF_CRM_62E6BA65"] = city
+        fields["UF_CRM_CITY"] = city
 
-    if province:
-        fields["UF_CRM_DAD7FA3C "] = province
+    if postal_code:
+        fields["UF_CRM_POST_CODE"] = postal_code
 
-    if full_address:
-        fields["UF_CRM_1756237510"] = full_address
+    if address:
+        fields["UF_CRM_68C9578E889C6"] = address
 
     # Osoba odpowiedzialna (musi to być ID numeryczne użytkownika, np. 1, 15, 183)
     if assigned_by_id:
@@ -313,13 +248,14 @@ def add_new_company_v2(
         fields["PHONE"] = [{"VALUE": phone, "VALUE_TYPE": "WORK"}]
 
     if email:
-        fields["UF_CRM_9086D325"] = [{"VALUE": email, "VALUE_TYPE": "WORK"}]
+        fields["UF_CRM_9086D325"] = email
 
     if website:
-        fields["UF_CRM_1FB9DDC7"] = [{"VALUE": website, "VALUE_TYPE": "WORK"}]
+        fields["UF_CRM_1FB9DDC7"] = website
 
     # Wywołanie API
     # Używamy metody crm.company.add
+    print("Dodano: ", fields )
     result = bitrix_call(config.WEBHOOK_URL, "crm.company.add.json", {"fields": fields})
 
     if "result" in result:
@@ -396,26 +332,21 @@ def main():
     #     )
 
     elif choice == "3":
-        # --- PRZYKŁAD DANYCH DO DODANIA ---
-        # Możesz te dane pobrać np. z innego pliku CSV lub input()
 
-        # UWAGA: Branża i Typ Firmy wymagają kodów systemowych (np. IT, MANUFACTURING), a nie polskich nazw.
-        # Aby poznać swoje kody, trzeba użyć metody crm.status.list
-
-        #TODO dodać pola branża specific
         add_new_company_v2(
-            title="Nowy format",
+            title="Marko królestwo diggerów -TEST-",
             nip="1234567891",  # Twoje pole UF_CRM_...
             phone="600 120 210",
-            email="kontakt@firma-testowa.pl", #nie pojawia się
-            website="https://firma-testowa.pl", #nie pojawia się
-            industry="UC_03OO31",  # Przykładowy kod branży
+            email="kontakt@firma-testowa-koparki.pl", #nie pojawia się
+            website="https://firma-testowa-koparki.pl", #nie pojawia się
+            industry="IT",  # Przykładowy kod branży
             city="Kędzierzyn-Koźle",
-            province="Województwo Opolskie",
-            full_address="Miła 12", # Pole adresu które później łączy się w pełny hash
+            #province="Województwo Opolskie",
+            postal_code="47-220",
+            address="Miła 12", # Pole adresu które później łączy się w pełny hash
             company_type="COMPETITOR",  # Przykładowy typ (Klient)
             assigned_by_id=1,  # ID Opiekuna (musi być liczbą/ID usera) #brak weryfikacji
-            comments="Firma dodana przez skrypt Python."
+            comments="Firma dodana przez skrypt Python. Giga main "
         )
 
     else:
