@@ -159,6 +159,67 @@ def fetch_all_fields():
 
     return fields
 
+#Not working properly
+def fetch_all_fields_contacts():
+    print(">>> Pobieranie listy dostępnych pól w kontaktach...")
+    fields = []
+    start = 0
+
+    while True:
+        url_base = getattr(config, 'WEBHOOK_URL_FIELDS_CONTACT_GET', config.WEBHOOK_URL_FIELDS_CONTACT_GET)
+
+        # Również tutaj zadziała mechanizm retry
+        r = bitrix_call(url_base, "crm.contact.userfield.list.json", {"start": start})
+
+        if "error" in r:
+            print("Błąd pobierania userów:", r)
+            break
+
+        batch = r.get("result", [])
+        if not batch:
+            break
+
+        fields.extend(batch)
+
+        if "next" not in r:
+            break
+        start = r["next"]
+
+    return fields
+
+def fetch_all_companies_contacts():
+    print(">>> Pobieranie listy dostępnych pól...")
+    contacts = []
+    start = 0
+    total_fetched_count = 0
+
+    while True:
+        url_base = getattr(config, 'WEBHOOK_URL_COMPANY_CONTACTS_GET', config.WEBHOOK_URL_COMPANY_CONTACTS_GET)
+
+        # Również tutaj zadziała mechanizm retry
+        r = bitrix_call(url_base, "crm.contact.list.json?select[]=ID&select[]=NAME&select[]=LAST_NAME&select[]=COMPANY_ID&select[]=TYPE_ID&select[]=SOURCE_ID&select[]=ASSIGNED_BY_ID&select[]=COMMENTS&select[]=PHONE&select[]=EMAIL", {"start": start})
+
+        if "error" in r:
+            print("Błąd pobierania userów:", r)
+            break
+
+        batch = r.get("result", [])
+        if not batch:
+            break
+
+        contacts.extend(batch)
+
+        batch_count = len(batch)
+        total_fetched_count += batch_count
+        print(f"Pobrano kolejną partię ({batch_count} sztuk). Łącznie pobrano: {total_fetched_count} kontaktów.")
+
+        if "next" not in r:
+            break
+        start = r["next"]
+
+    return contacts
+
+
 def process_companies_with_users(raw_companies, final_output_file):
     users = fetch_all_users()
 
@@ -188,7 +249,76 @@ def process_companies_with_users(raw_companies, final_output_file):
 #
 
 
-def add_new_company_v2(
+def add_new_contact(
+    name,               # Imię (Wymagane)
+    last_name,          # Nazwisko (Wymagane)
+    company_id=None,    # ID firmy, do której przypisać kontakt
+    company_type=None,  # Typ firmy np szambo
+    phone=None,         # Numer telefonu
+    email=None,         # Adres e-mail
+    assigned_by_id=None, # ID osoby odpowiedzialnej (np. 183)
+    type_id=None,       # Typ kontaktu (np. CLIENT, SUPPLIER)
+    source_id=None,     # Źródło (np. CALL, EMAIL, WEB)
+    comments=None       # Komentarze/Uwagi
+):
+    """
+    Tworzy nowy kontakt w Bitrix24 i opcjonalnie przypisuje go do firmy.
+    """
+    print(f"🚀 Wysyłam dane dla kontaktu: {name} {last_name}...")
+
+    # Budowanie struktury 'fields'
+    fields = {
+        "NAME": name,
+        "LAST_NAME": last_name,
+        "OPENED": "Y"  # Kontakt widoczny dla wszystkich
+    }
+
+    # Powiązanie z firmą (musi to być ID numeryczne firmy)
+    if company_id:
+        fields["COMPANY_ID"] = company_id
+
+    if company_type:
+        fields["UF_CRM_1762172335764"] = company_type
+
+    # Osoba odpowiedzialna
+    if assigned_by_id:
+        fields["ASSIGNED_BY_ID"] = assigned_by_id
+
+    # Typ kontaktu (np. CLIENT, SUPPLIER, PARTNER)
+    if type_id:
+        fields["TYPE_ID"] = type_id
+
+    # Źródło (np. CALL, EMAIL, WEB, RECOMMENDATION)
+    if source_id:
+        fields["SOURCE_ID"] = source_id
+
+    # Komentarz
+    if comments:
+        fields["COMMENTS"] = comments
+
+    # Pola wielokrotne (Telefon) - struktura listy słowników
+    if phone:
+        fields["PHONE"] = [{"VALUE": phone, "VALUE_TYPE": "WORK"}]
+
+    # Pola wielokrotne (Email)
+    if email:
+        fields["EMAIL"] = [{"VALUE": email, "VALUE_TYPE": "WORK"}]
+
+    # Wywołanie API
+    # Używamy metody crm.contact.add.json
+    print("Dane kontaktu: ", fields)
+    result = bitrix_call(config.WEBHOOK_URL_CONTACT_ADD, "crm.contact.add.json", {"fields": fields})
+
+    if "result" in result:
+        new_id = result["result"]
+        print(f"✅ Sukces! Dodano nowy kontakt. ID: {new_id}")
+        return new_id
+    else:
+        print(f"❌ Błąd podczas dodawania kontaktu: {result}")
+        return None
+
+
+def add_new_company(
     title,  # Nazwa firmy (Wymagane)
     nip=None,  # Twój custom field: UF_CRM_78FF9738
     phone=None,  # Telefon
@@ -288,15 +418,19 @@ def save_to_csv(filename, rows):
     except IOError as e:
         print(f"Błąd zapisu pliku: {e}")
 
+
 # --- MAIN ---
 
 def main():
     print("--- BITRIX INTEGRATION ---")
     print("1. Pobierz wszystkie firmy do CSV (Export)")
     print("2. Pobierz wszystkie pola do CSV (Export)")
-    print("3. Dodaj nową firmę (Import)")
+    #print("3. Pobierz wszystkie pola kontaktów do CSV (Export)")
+    print("4. Pobierz wszystkie kontakty do CSV (Export)")
+    print("5. Dodaj nową firmę (Import)")
+    print("6. Dodaj nowy kontakt (Import)")
 
-    choice = input("Wybierz opcję (1/3): ").strip()
+    choice = input("Wybierz opcję (1/6): ").strip()
 
     if choice == "1":
         FILE_FINAL = "companies_full_export.csv"
@@ -312,6 +446,19 @@ def main():
         if fields_data:
             save_to_csv(File_fields, fields_data)
 
+    # elif choice == "3":
+    #
+    #     file_contact_fields = config.OUTPUT_CONTACT_FIELDS
+    #     fields_contact_data = fetch_all_fields_contacts()
+    #     if fields_contact_data:
+    #         save_to_csv(file_contact_fields, fields_contact_data)
+
+    elif choice == "4":
+
+        File_contacts = config.OUTPUT_CONTACTS
+        contacts_data = fetch_all_companies_contacts()
+        if contacts_data:
+            save_to_csv(File_contacts, contacts_data)
     # elif choice == "3":
     #     # --- PRZYKŁAD DANYCH DO DODANIA ---
     #     # Możesz te dane pobrać np. z innego pliku CSV lub input()
@@ -331,9 +478,9 @@ def main():
     #         comments="Firma dodana przez skrypt Python."
     #     )
 
-    elif choice == "3":
+    elif choice == "5":
 
-        add_new_company_v2(
+        add_new_company(
             title="Marko królestwo diggerów -TEST-",
             nip="1234567891",  # Twoje pole UF_CRM_...
             phone="600 120 210",
@@ -347,6 +494,21 @@ def main():
             company_type="COMPETITOR",  # Przykładowy typ (Klient)
             assigned_by_id=1,  # ID Opiekuna (musi być liczbą/ID usera) #brak weryfikacji
             comments="Firma dodana przez skrypt Python. Giga main "
+        )
+
+    elif choice == "6":
+
+        add_new_contact(
+            name="Marko",
+            last_name="KOPACZ",
+            company_id=14943,
+            company_type="783",
+            type_id="SUPPLIER",
+            phone="696969123",
+            email="Marko.KOPACZ@wp.pl",
+            assigned_by_id=1,
+            source_id="CALL",
+            comments="Klient dzwonił w sprawie pumy. -SKRYPT PYTHON-"
         )
 
     else:
