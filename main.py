@@ -1,7 +1,9 @@
 import requests
 import csv
 import time
-from config import config
+from config import bitrix_config
+
+#TODO tidy this up for actual use in API
 
 # Parametry SELECT
 SELECT_PARAMS = ["*", "UF_*", "PHONE", "EMAIL", "WEB"]
@@ -56,13 +58,14 @@ def bitrix_call(webhook_url, method, params=None):
                 print("❌ Błąd krytyczny: Nie udało się połączyć po wszystkich próbach.")
                 return {"error": str(e)}
 
+
 # --- KROK 1: Pobieranie Firm (Logika stronicowania) ---
 
 def fetch_all_companies_optimized():
     print(">>> Rozpoczynam pobieranie firm...")
 
     all_companies = []
-    start = 0
+    start = 7300
     total_fetched_count = 0
 
     while True:
@@ -73,7 +76,7 @@ def fetch_all_companies_optimized():
         }
 
         # Tutaj wywołujemy naszą bezpieczną funkcję z retry
-        r = bitrix_call(config.WEBHOOK_URL, "crm.company.list.json", params)
+        r = bitrix_call(bitrix_config.WEBHOOK_URL, "crm.company.list.json", params)
 
         if "error" in r:
             print(f"Przerwano pobieranie z powodu błędu: {r}")
@@ -101,6 +104,7 @@ def fetch_all_companies_optimized():
 
     return all_companies
 
+
 # --- KROK 2: Pobieranie Użytkowników i aktualizacja CSV ---
 
 def fetch_all_users():
@@ -109,7 +113,7 @@ def fetch_all_users():
     start = 0
 
     while True:
-        url_base = getattr(config, 'WEBHOOK_URL_USER_GET', config.WEBHOOK_URL)
+        url_base = getattr(bitrix_config, 'WEBHOOK_URL_USER_GET', bitrix_config.WEBHOOK_URL)
 
         # Również tutaj zadziała mechanizm retry
         r = bitrix_call(url_base, "user.get.json", {"start": start})
@@ -130,6 +134,7 @@ def fetch_all_users():
 
     return users
 
+
 # --- Pobieranie dostępnych pól i aktualizacja CSV ---
 
 def fetch_all_fields():
@@ -138,7 +143,7 @@ def fetch_all_fields():
     start = 0
 
     while True:
-        url_base = getattr(config, 'WEBHOOK_URL_FIELDS_GET', config.WEBHOOK_URL_FIELDS_GET)
+        url_base = getattr(bitrix_config, 'WEBHOOK_URL_FIELDS_GET', bitrix_config.WEBHOOK_URL_FIELDS_GET)
 
         # Również tutaj zadziała mechanizm retry
         r = bitrix_call(url_base, "crm.status.list.json", {"start": start})
@@ -159,14 +164,16 @@ def fetch_all_fields():
 
     return fields
 
-#Not working properly
+
+# Not working properly
 def fetch_all_fields_contacts():
     print(">>> Pobieranie listy dostępnych pól w kontaktach...")
     fields = []
     start = 0
 
     while True:
-        url_base = getattr(config, 'WEBHOOK_URL_FIELDS_CONTACT_GET', config.WEBHOOK_URL_FIELDS_CONTACT_GET)
+        url_base = getattr(bitrix_config, 'WEBHOOK_URL_FIELDS_CONTACT_GET',
+                           bitrix_config.WEBHOOK_URL_FIELDS_CONTACT_GET)
 
         # Również tutaj zadziała mechanizm retry
         r = bitrix_call(url_base, "crm.contact.userfield.list.json", {"start": start})
@@ -187,6 +194,7 @@ def fetch_all_fields_contacts():
 
     return fields
 
+
 def fetch_all_companies_contacts():
     print(">>> Pobieranie listy dostępnych pól...")
     contacts = []
@@ -194,10 +202,13 @@ def fetch_all_companies_contacts():
     total_fetched_count = 0
 
     while True:
-        url_base = getattr(config, 'WEBHOOK_URL_COMPANY_CONTACTS_GET', config.WEBHOOK_URL_COMPANY_CONTACTS_GET)
+        url_base = getattr(bitrix_config, 'WEBHOOK_URL_COMPANY_CONTACTS_GET',
+                           bitrix_config.WEBHOOK_URL_COMPANY_CONTACTS_GET)
 
         # Również tutaj zadziała mechanizm retry
-        r = bitrix_call(url_base, "crm.contact.list.json?select[]=ID&select[]=NAME&select[]=LAST_NAME&select[]=COMPANY_ID&select[]=TYPE_ID&select[]=SOURCE_ID&select[]=ASSIGNED_BY_ID&select[]=COMMENTS&select[]=PHONE&select[]=EMAIL", {"start": start})
+        r = bitrix_call(url_base,
+                        "crm.contact.list.json?select[]=ID&select[]=NAME&select[]=LAST_NAME&select[]=COMPANY_ID&select[]=TYPE_ID&select[]=SOURCE_ID&select[]=ASSIGNED_BY_ID&select[]=COMMENTS&select[]=PHONE&select[]=EMAIL",
+                        {"start": start})
 
         if "error" in r:
             print("Błąd pobierania userów:", r)
@@ -250,16 +261,16 @@ def process_companies_with_users(raw_companies, final_output_file):
 
 
 def add_new_contact(
-    name,               # Imię (Wymagane)
-    last_name,          # Nazwisko (Wymagane)
-    company_id=None,    # ID firmy, do której przypisać kontakt
-    company_type=None,  # Typ firmy np szambo
-    phone=None,         # Numer telefonu
-    email=None,         # Adres e-mail
-    assigned_by_id=None, # ID osoby odpowiedzialnej (np. 183)
-    type_id=None,       # Typ kontaktu (np. CLIENT, SUPPLIER)
-    source_id=None,     # Źródło (np. CALL, EMAIL, WEB)
-    comments=None       # Komentarze/Uwagi
+        name,  # Imię (Wymagane)
+        last_name,  # Nazwisko (Wymagane)
+        company_id=None,  # ID firmy, do której przypisać kontakt
+        company_type=None,  # Typ firmy np szambo
+        phone=None,  # Numer telefonu
+        email=None,  # Adres e-mail
+        assigned_by_id=None,  # ID osoby odpowiedzialnej (np. 183)
+        type_id=None,  # Typ kontaktu (np. CLIENT, SUPPLIER)
+        source_id=None,  # Źródło (np. CALL, EMAIL, WEB)
+        comments=None  # Komentarze/Uwagi
 ):
     """
     Tworzy nowy kontakt w Bitrix24 i opcjonalnie przypisuje go do firmy.
@@ -307,7 +318,7 @@ def add_new_contact(
     # Wywołanie API
     # Używamy metody crm.contact.add.json
     print("Dane kontaktu: ", fields)
-    result = bitrix_call(config.WEBHOOK_URL_CONTACT_ADD, "crm.contact.add.json", {"fields": fields})
+    result = bitrix_call(bitrix_config.WEBHOOK_URL_CONTACT_ADD, "crm.contact.add.json", {"fields": fields})
 
     if "result" in result:
         new_id = result["result"]
@@ -319,19 +330,19 @@ def add_new_contact(
 
 
 def add_new_company(
-    title,  # Nazwa firmy (Wymagane)
-    nip=None,  # Twój custom field: UF_CRM_78FF9738
-    phone=None,  # Telefon
-    email=None,  # E-mail
-    website=None,  # WWW
-    industry=None,  # Branża (kod, np. IT, MANUFACTURING)
-    company_type=None,  # Typ firmy (kod, np. CUSTOMER, PARTNER)
-    city=None,
-    #province=None,
-    postal_code=None,
-    address=None,
-    assigned_by_id=None,  # ID osoby odpowiedzialnej (np. 183)
-    comments=None  # Komentarze
+        title,  # Nazwa firmy (Wymagane)
+        nip=None,  # Twój custom field: UF_CRM_78FF9738
+        phone=None,  # Telefon
+        email=None,  # E-mail
+        website=None,  # WWW
+        industry=None,  # Branża (kod, np. IT, MANUFACTURING)
+        company_type=None,  # Typ firmy (kod, np. CUSTOMER, PARTNER)
+        city=None,
+        # province=None,
+        postal_code=None,
+        address=None,
+        assigned_by_id=None,  # ID osoby odpowiedzialnej (np. 183)
+        comments=None  # Komentarze
 ):
     """
     Tworzy nową firmę w Bitrix24.
@@ -385,8 +396,8 @@ def add_new_company(
 
     # Wywołanie API
     # Używamy metody crm.company.add
-    print("Dodano: ", fields )
-    result = bitrix_call(config.WEBHOOK_URL, "crm.company.add.json", {"fields": fields})
+    print("Dodano: ", fields)
+    result = bitrix_call(bitrix_config.WEBHOOK_URL, "crm.company.add.json", {"fields": fields})
 
     if "result" in result:
         new_id = result["result"]
@@ -395,6 +406,7 @@ def add_new_company(
     else:
         print(f"❌ Błąd podczas dodawania firmy: {result}")
         return None
+
 
 def save_to_csv(filename, rows):
     if not rows:
@@ -419,18 +431,100 @@ def save_to_csv(filename, rows):
         print(f"Błąd zapisu pliku: {e}")
 
 
+# --- NOWA FUNKCJA: Aktualizacja Nazw o NIP ---
+
+def update_companies_titles_with_nip():
+    """
+    Pobiera firmy, sprawdza czy mają NIP (UF_CRM_78FF9738).
+    Jeśli NIP jest i nie ma go w nazwie (TITLE), aktualizuje nazwę.
+    """
+    print(">>> Rozpoczynam aktualizację nazw firm (dodawanie NIP do TITLE)...")
+
+    # Definiujemy ID pola NIP (łatwiej zmieniać w jednym miejscu)
+    NIP_FIELD_KEY = "UF_CRM_78FF9738"
+
+    start = 0
+    total_processed = 0
+    total_updated = 0
+
+    while True:
+        # Pobieramy ID, TITLE oraz NIP
+        params = {
+            "order": {"ID": "ASC"},
+            "select": ["ID", "TITLE", NIP_FIELD_KEY],
+            "start": start
+        }
+
+        r = bitrix_call(bitrix_config.WEBHOOK_URL, "crm.company.list.json", params)
+
+        if "error" in r:
+            print(f"❌ Przerwano pobieranie z powodu błędu: {r}")
+            break
+
+        batch = r.get("result", [])
+        if not batch:
+            break
+
+        for company in batch:
+            # Pobieramy zmienną lokalną (cały rekord w batchu)
+            c_id = company.get("ID")
+            title = company.get("TITLE", "")
+            nip = company.get(NIP_FIELD_KEY)
+
+            # 1. Sprawdzamy czy pole NIP istnieje i nie jest puste
+            if nip:
+                nip_str = str(nip).strip()
+                title_str = str(title).strip()
+
+                # 2. Sprawdzamy czy TITLE zawiera w sobie NIP
+                if nip_str in title_str:
+                    # Ignorujemy
+                    pass
+                else:
+                    # 3. Jeśli nie, aktualizujemy nazwę
+                    new_title = f"{title_str} | {nip_str}"
+
+                    update_fields = {"TITLE": new_title}
+
+                    print(f"🔄 Aktualizacja ID {c_id}: '{title_str}' -> '{new_title}'")
+
+                    # API call do aktualizacji
+                    update_res = bitrix_call(bitrix_config.WEBHOOK_URL_COMPANY_UPDATE, "crm.company.update.json", {
+                        "id": c_id,
+                        "fields": update_fields
+                    })
+
+                    if "error" in update_res:
+                        print(f"   ⚠️ Błąd aktualizacji ID {c_id}: {update_res}")
+                    else:
+                        total_updated += 1
+
+        batch_count = len(batch)
+        total_processed += batch_count
+        print(f"Przetworzono partię: {batch_count}. Łącznie: {total_processed}. Zaktualizowano nazw: {total_updated}")
+
+        if "next" in r:
+            start = r["next"]
+        else:
+            print("--- Koniec przetwarzania ---")
+            break
+
+    print(f"\n✅ Zakończono! Zaktualizowano {total_updated} firm.")
+
+
 # --- MAIN ---
 
 def main():
     print("--- BITRIX INTEGRATION ---")
     print("1. Pobierz wszystkie firmy do CSV (Export)")
     print("2. Pobierz wszystkie pola do CSV (Export)")
-    #print("3. Pobierz wszystkie pola kontaktów do CSV (Export)")
+    # print("3. Pobierz wszystkie pola kontaktów do CSV (Export)")
     print("4. Pobierz wszystkie kontakty do CSV (Export)")
     print("5. Dodaj nową firmę (Import)")
     print("6. Dodaj nowy kontakt (Import)")
+    print("7. Zaktualizuj nazwy firm (Dodaj NIP do nazwy, jeśli go brak)")
 
-    choice = input("Wybierz opcję (1/6): ").strip()
+    choice = input("Wybierz opcję (1/7): ").strip()
 
     if choice == "1":
         FILE_FINAL = "companies_full_export.csv"
@@ -441,7 +535,7 @@ def main():
 
     elif choice == "2":
 
-        File_fields = config.OUTPUT_FIELDS
+        File_fields = bitrix_config.OUTPUT_FIELDS
         fields_data = fetch_all_fields()
         if fields_data:
             save_to_csv(File_fields, fields_data)
@@ -455,28 +549,11 @@ def main():
 
     elif choice == "4":
 
-        File_contacts = config.OUTPUT_CONTACTS
+        File_contacts = bitrix_config.OUTPUT_CONTACTS
         contacts_data = fetch_all_companies_contacts()
         if contacts_data:
             save_to_csv(File_contacts, contacts_data)
-    # elif choice == "3":
-    #     # --- PRZYKŁAD DANYCH DO DODANIA ---
-    #     # Możesz te dane pobrać np. z innego pliku CSV lub input()
-    #
-    #     # UWAGA: Branża i Typ Firmy wymagają kodów systemowych (np. IT, MANUFACTURING), a nie polskich nazw.
-    #     # Aby poznać swoje kody, trzeba użyć metody crm.status.list
-    #
-    #     add_new_company(
-    #         title="Nowa Firma Testowaaaa",
-    #         nip="1234567891",  # Twoje pole UF_CRM_...
-    #         phone="600 120 210",
-    #         email="kontakt@firma-testowa.pl", #nie pojawia się
-    #         website="https://firma-testowa.pl", #nie pojawia się
-    #         industry="IT",  # Przykładowy kod branży
-    #         company_type="COMPETITOR",  # Przykładowy typ (Klient)
-    #         assigned_by_id=1,  # ID Opiekuna (musi być liczbą/ID usera) #brak weryfikacji
-    #         comments="Firma dodana przez skrypt Python."
-    #     )
+
 
     elif choice == "5":
 
@@ -484,13 +561,13 @@ def main():
             title="Marko królestwo diggerów -TEST-",
             nip="1234567891",  # Twoje pole UF_CRM_...
             phone="600 120 210",
-            email="kontakt@firma-testowa-koparki.pl", #nie pojawia się
-            website="https://firma-testowa-koparki.pl", #nie pojawia się
+            email="kontakt@firma-testowa-koparki.pl",  # nie pojawia się
+            website="https://firma-testowa-koparki.pl",  # nie pojawia się
             industry="IT",  # Przykładowy kod branży
             city="Kędzierzyn-Koźle",
-            #province="Województwo Opolskie",
+            # province="Województwo Opolskie",
             postal_code="47-220",
-            address="Miła 12", # Pole adresu które później łączy się w pełny hash
+            address="Miła 12",  # Pole adresu które później łączy się w pełny hash
             company_type="COMPETITOR",  # Przykładowy typ (Klient)
             assigned_by_id=1,  # ID Opiekuna (musi być liczbą/ID usera) #brak weryfikacji
             comments="Firma dodana przez skrypt Python. Giga main "
@@ -511,8 +588,13 @@ def main():
             comments="Klient dzwonił w sprawie pumy. -SKRYPT PYTHON-"
         )
 
+    elif choice == "7":
+        # Uruchomienie nowej logiki
+        update_companies_titles_with_nip()
+
     else:
         print("Nieprawidłowy wybór.")
+
 
 if __name__ == "__main__":
     main()
