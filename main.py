@@ -1,7 +1,7 @@
 import requests
 import csv
 import time
-from config import bitrix_config
+from config import BitrixConfig
 
 #TODO tidy this up for actual use in API
 
@@ -61,11 +61,84 @@ def bitrix_call(webhook_url, method, params=None):
 
 # --- KROK 1: Pobieranie Firm (Logika stronicowania) ---
 
-def fetch_all_companies_optimized():
+
+def fetch_companies_by_industry(industry: str):
+    """
+    Pobiera wszystkie firmy, filtruje je po polu INDUSTRY.
+    Dodatkowo sprawdza, czy firma posiada dane adresowe (Ulica, Miasto lub Kod).
+    Zwraca tylko firmy posiadające minimum jeden z tych parametrów.
+    """
+    print(f"🔍 Rozpoczynam poszukiwanie firm z branży: '{industry}'")
+
+    # Pobieramy firmy (zachowałem Twój start=5300, zmień na 0 jeśli chcesz całość)
+    all_companies = fetch_all_companies_optimized(start=5300)
+
+    valid_companies = []
+    missing_address_count = 0
+
+    print(">>> Rozpoczynam filtrowanie danych (Branża + Adres)...")
+
+    for company in all_companies:
+        # 1. Sprawdzenie branży
+        comp_industry = company.get("INDUSTRY")
+
+        # Jeśli branża się nie zgadza, pomijamy od razu
+        if str(comp_industry) != industry:
+            continue
+
+        # 2. Pobieranie danych adresowych
+        # Używamy .get z domyślnym pustym stringiem, aby uniknąć None
+        city = str(company.get("UF_CRM_CITY", "") or "").strip()
+        postal_code = str(company.get("UF_CRM_POST_CODE", "") or "").strip()
+        raw_address = str(company.get("UF_CRM_68C9578E889C6", "") or "").strip()
+
+        # 3. Czyszczenie ulicy do weryfikacji (usuwanie "ul.", "Ul." itp.)
+        # Zamieniamy na małe litery tylko do sprawdzenia, czy po usunięciu "ul." coś zostaje
+        address_check = raw_address.lower().replace("ul.", "").replace("ul ", "").strip()
+
+        # 4. Warunek: Musi istnieć Miasto LUB Kod LUB Ulica (po oczyszczeniu)
+        has_address_data = (len(city) > 0) or (len(postal_code) > 0) or (len(address_check) > 0)
+
+        if has_address_data:
+            valid_companies.append(company)
+        else:
+            missing_address_count += 1
+
+    # 3. Printowanie wyników
+    print(f"\n--- WYNIKI FILTROWANIA (Branża: {industry}) ---")
+
+    if valid_companies:
+        for idx, comp in enumerate(valid_companies, 1):
+            c_id = comp.get("ID", "N/A")
+            c_title = comp.get("TITLE", "Bez nazwy")
+            c_phone = comp.get("PHONE", "")
+            c_email = comp.get("EMAIL", "")
+            c_website = comp.get("WEB", "")
+
+            c_postal_code = comp.get("UF_CRM_POST_CODE", "")
+            c_assigned_by = comp.get("ASSIGNED_BY_ID", "")
+            c_nip = comp.get("UF_CRM_78FF9738", "")
+            c_city = comp.get("UF_CRM_CITY", "")
+            c_address = comp.get("UF_CRM_68C9578E889C6", "")
+
+            print(f"{idx}. [ID: {c_id} {c_title}] Telefon: {c_phone}, E-mail: {c_email}, WWW: {c_website},"
+                  f" Kod: {c_postal_code}, ID dodającego: {c_assigned_by}, NIP: {c_nip}, Miasto: {c_city}, Adres: {c_address} ")
+    else:
+        print("Brak firm spełniających kryteria (Branża + Adres).")
+
+    print(f"-----------------------------------------------")
+    print(f"✅ Znaleziono poprawnych (z adresem): {len(valid_companies)}")
+    print(f"❌ Odrzucono (brak adresu, ale dobra branża): {missing_address_count}")
+    print(f"-----------------------------------------------\n")
+
+    return valid_companies
+
+
+def fetch_all_companies_optimized(start: int):
     print(">>> Rozpoczynam pobieranie firm...")
 
     all_companies = []
-    start = 7300
+    #start = 7300
     total_fetched_count = 0
 
     while True:
@@ -76,7 +149,7 @@ def fetch_all_companies_optimized():
         }
 
         # Tutaj wywołujemy naszą bezpieczną funkcję z retry
-        r = bitrix_call(bitrix_config.WEBHOOK_URL, "crm.company.list.json", params)
+        r = bitrix_call(BitrixConfig.WEBHOOK_URL, "crm.company.list.json", params)
 
         if "error" in r:
             print(f"Przerwano pobieranie z powodu błędu: {r}")
@@ -113,7 +186,7 @@ def fetch_all_users():
     start = 0
 
     while True:
-        url_base = getattr(bitrix_config, 'WEBHOOK_URL_USER_GET', bitrix_config.WEBHOOK_URL)
+        url_base = getattr(BitrixConfig, 'WEBHOOK_URL_USER_GET', BitrixConfig.WEBHOOK_URL)
 
         # Również tutaj zadziała mechanizm retry
         r = bitrix_call(url_base, "user.get.json", {"start": start})
@@ -143,7 +216,7 @@ def fetch_all_fields():
     start = 0
 
     while True:
-        url_base = getattr(bitrix_config, 'WEBHOOK_URL_FIELDS_GET', bitrix_config.WEBHOOK_URL_FIELDS_GET)
+        url_base = getattr(BitrixConfig, 'WEBHOOK_URL_FIELDS_GET', BitrixConfig.WEBHOOK_URL_FIELDS_GET)
 
         # Również tutaj zadziała mechanizm retry
         r = bitrix_call(url_base, "crm.status.list.json", {"start": start})
@@ -172,8 +245,8 @@ def fetch_all_fields_contacts():
     start = 0
 
     while True:
-        url_base = getattr(bitrix_config, 'WEBHOOK_URL_FIELDS_CONTACT_GET',
-                           bitrix_config.WEBHOOK_URL_FIELDS_CONTACT_GET)
+        url_base = getattr(BitrixConfig, 'WEBHOOK_URL_FIELDS_CONTACT_GET',
+                           BitrixConfig.WEBHOOK_URL_FIELDS_CONTACT_GET)
 
         # Również tutaj zadziała mechanizm retry
         r = bitrix_call(url_base, "crm.contact.userfield.list.json", {"start": start})
@@ -202,8 +275,8 @@ def fetch_all_companies_contacts():
     total_fetched_count = 0
 
     while True:
-        url_base = getattr(bitrix_config, 'WEBHOOK_URL_COMPANY_CONTACTS_GET',
-                           bitrix_config.WEBHOOK_URL_COMPANY_CONTACTS_GET)
+        url_base = getattr(BitrixConfig, 'WEBHOOK_URL_COMPANY_CONTACTS_GET',
+                           BitrixConfig.WEBHOOK_URL_COMPANY_CONTACTS_GET)
 
         # Również tutaj zadziała mechanizm retry
         r = bitrix_call(url_base,
@@ -254,10 +327,6 @@ def process_companies_with_users(raw_companies, final_output_file):
             row["ASSIGNED_BY_ID"] = user_map[str(a_id)]
 
     save_to_csv(final_output_file, raw_companies)
-
-
-# def normalise_field_names():
-#
 
 
 def add_new_contact(
@@ -318,7 +387,7 @@ def add_new_contact(
     # Wywołanie API
     # Używamy metody crm.contact.add.json
     print("Dane kontaktu: ", fields)
-    result = bitrix_call(bitrix_config.WEBHOOK_URL_CONTACT_ADD, "crm.contact.add.json", {"fields": fields})
+    result = bitrix_call(BitrixConfig.WEBHOOK_URL_CONTACT_ADD, "crm.contact.add.json", {"fields": fields})
 
     if "result" in result:
         new_id = result["result"]
@@ -397,7 +466,7 @@ def add_new_company(
     # Wywołanie API
     # Używamy metody crm.company.add
     print("Dodano: ", fields)
-    result = bitrix_call(bitrix_config.WEBHOOK_URL, "crm.company.add.json", {"fields": fields})
+    result = bitrix_call(BitrixConfig.WEBHOOK_URL, "crm.company.add.json", {"fields": fields})
 
     if "result" in result:
         new_id = result["result"]
@@ -455,7 +524,7 @@ def update_companies_titles_with_nip():
             "start": start
         }
 
-        r = bitrix_call(bitrix_config.WEBHOOK_URL, "crm.company.list.json", params)
+        r = bitrix_call(BitrixConfig.WEBHOOK_URL, "crm.company.list.json", params)
 
         if "error" in r:
             print(f"❌ Przerwano pobieranie z powodu błędu: {r}")
@@ -489,7 +558,7 @@ def update_companies_titles_with_nip():
                     print(f"🔄 Aktualizacja ID {c_id}: '{title_str}' -> '{new_title}'")
 
                     # API call do aktualizacji
-                    update_res = bitrix_call(bitrix_config.WEBHOOK_URL_COMPANY_UPDATE, "crm.company.update.json", {
+                    update_res = bitrix_call(BitrixConfig.WEBHOOK_URL_COMPANY_UPDATE, "crm.company.update.json", {
                         "id": c_id,
                         "fields": update_fields
                     })
@@ -511,7 +580,6 @@ def update_companies_titles_with_nip():
 
     print(f"\n✅ Zakończono! Zaktualizowano {total_updated} firm.")
 
-
 # --- MAIN ---
 
 def main():
@@ -523,6 +591,7 @@ def main():
     print("5. Dodaj nową firmę (Import)")
     print("6. Dodaj nowy kontakt (Import)")
     print("7. Zaktualizuj nazwy firm (Dodaj NIP do nazwy, jeśli go brak)")
+    print("8. Pobierz firmy po industry")
 
     choice = input("Wybierz opcję (1/7): ").strip()
 
@@ -535,7 +604,7 @@ def main():
 
     elif choice == "2":
 
-        File_fields = bitrix_config.OUTPUT_FIELDS
+        File_fields = BitrixConfig.OUTPUT_FIELDS
         fields_data = fetch_all_fields()
         if fields_data:
             save_to_csv(File_fields, fields_data)
@@ -549,7 +618,7 @@ def main():
 
     elif choice == "4":
 
-        File_contacts = bitrix_config.OUTPUT_CONTACTS
+        File_contacts = BitrixConfig.OUTPUT_CONTACTS
         contacts_data = fetch_all_companies_contacts()
         if contacts_data:
             save_to_csv(File_contacts, contacts_data)
@@ -591,6 +660,9 @@ def main():
     elif choice == "7":
         # Uruchomienie nowej logiki
         update_companies_titles_with_nip()
+
+    elif choice == "8":
+        fetch_companies_by_industry("NOTPROFIT")
 
     else:
         print("Nieprawidłowy wybór.")
