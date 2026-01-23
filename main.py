@@ -66,45 +66,58 @@ def fetch_companies_by_industry(industry: str):
     """
     Pobiera wszystkie firmy, filtruje je po polu INDUSTRY.
     Dodatkowo sprawdza, czy firma posiada dane adresowe (Ulica, Miasto lub Kod).
+    Czyści adres z 'ul.', kropek i przecinków przed zwróceniem.
     Zwraca tylko firmy posiadające minimum jeden z tych parametrów.
     """
     print(f"🔍 Rozpoczynam poszukiwanie firm z branży: '{industry}'")
 
-    # Pobieramy firmy (zachowałem Twój start=5300, zmień na 0 jeśli chcesz całość)
+    # Pobieramy firmy (zachowałem Twój start=5300)
     all_companies = fetch_all_companies_optimized(start=5300)
 
     valid_companies = []
     missing_address_count = 0
 
-    print(">>> Rozpoczynam filtrowanie danych (Branża + Adres)...")
+    print(">>> Rozpoczynam filtrowanie i czyszczenie danych...")
 
     for company in all_companies:
         # 1. Sprawdzenie branży
         comp_industry = company.get("INDUSTRY")
 
-        # Jeśli branża się nie zgadza, pomijamy od razu
         if str(comp_industry) != industry:
             continue
 
         # 2. Pobieranie danych adresowych
-        # Używamy .get z domyślnym pustym stringiem, aby uniknąć None
         city = str(company.get("UF_CRM_CITY", "") or "").strip()
         postal_code = str(company.get("UF_CRM_POST_CODE", "") or "").strip()
         raw_address = str(company.get("UF_CRM_68C9578E889C6", "") or "").strip()
 
-        # 3. Czyszczenie ulicy do weryfikacji (usuwanie "ul.", "Ul." itp.)
-        # Zamieniamy na małe litery tylko do sprawdzenia, czy po usunięciu "ul." coś zostaje
-        address_check = raw_address.lower().replace("ul.", "").replace("ul ", "").strip()
+        # 3. CZYSZCZENIE ADRESU (Nowa sekcja)
+        clean_address = raw_address
+
+        # Usuwanie wariantów "ul." / "ul " (wielkość liter uwzględniona w liście)
+        # Robimy to przed usunięciem kropek, aby wyłapać "ul." w całości
+        prefixes_to_remove = ["ul.", "Ul.", "UL.", "ul ", "Ul ", "UL "]
+        for prefix in prefixes_to_remove:
+            clean_address = clean_address.replace(prefix, "")
+
+        # Usuwanie kropek i przecinków oraz zbędnych spacji
+        clean_address = clean_address.replace(".", "").replace(",", "").strip()
+
+        # WAŻNE: Nadpisujemy surowy adres wersją wyczyszczoną w obiekcie firmy
+        # Dzięki temu zwracana lista i printy będą miały czysty format
+        company["UF_CRM_68C9578E889C6"] = clean_address
 
         # 4. Warunek: Musi istnieć Miasto LUB Kod LUB Ulica (po oczyszczeniu)
-        has_address_data = (len(city) > 0) or (len(postal_code) > 0) or (len(address_check) > 0)
+        # Sprawdzamy na clean_address, który jest już pozbawiony "ul." itp.
+        has_address_data = (len(city) > 0 and len(clean_address) > 0) or (
+                    len(postal_code) > 0 and len(clean_address) > 0)
 
         if has_address_data:
             valid_companies.append(company)
         else:
             missing_address_count += 1
 
-    # 3. Printowanie wyników
+    # 5. Printowanie wyników
     print(f"\n--- WYNIKI FILTROWANIA (Branża: {industry}) ---")
 
     if valid_companies:
@@ -119,6 +132,8 @@ def fetch_companies_by_industry(industry: str):
             c_assigned_by = comp.get("ASSIGNED_BY_ID", "")
             c_nip = comp.get("UF_CRM_78FF9738", "")
             c_city = comp.get("UF_CRM_CITY", "")
+
+            # Tutaj pobieramy już wyczyszczony adres
             c_address = comp.get("UF_CRM_68C9578E889C6", "")
 
             print(f"{idx}. [ID: {c_id} {c_title}] Telefon: {c_phone}, E-mail: {c_email}, WWW: {c_website},"
