@@ -1,7 +1,11 @@
+import os
+import re
+
 import requests
 import csv
 import time
 from config import BitrixConfig
+from config import TelephonyConfig
 
 #TODO tidy this up for actual use in API
 
@@ -595,6 +599,165 @@ def update_companies_titles_with_nip():
 
     print(f"\n✅ Zakończono! Zaktualizowano {total_updated} firm.")
 
+
+# --- NOWA FUNKCJA: Pobieranie telefoni ---
+
+def parse_source_from_tgstack(tg_stack_str):
+    """
+    Sprawdza, czy w TG_STACK znajduje się numer ze słownika SOURCE_NUMBERS.
+    """
+    if not tg_stack_str or "Error" in tg_stack_str or "Not Found" in tg_stack_str:
+        return ""
+    first_part = tg_stack_str.split(',')[0].strip()
+    for number, label in TelephonyConfig.SOURCE_NUMBERS.items():
+        if number in first_part:
+            return label
+    return ""
+
+
+# --- NOWA FUNKCJA: Mapowanie Portal Number ---
+def map_portal_number(portal_number_str):
+    """
+    Sprawdza czy portal_number_str (np. 'reg66825') istnieje w słowniku PORTAL_NUMBERS.
+    Jeśli tak, zwraca przypisaną wartość (np. '4822626392').
+    """
+    if not portal_number_str:
+        return ""
+
+    # Pobieramy wartość ze słownika, jeśli klucza nie ma, zwraca pusty string
+    return TelephonyConfig.PORTAL_NUMBERS.get(str(portal_number_str), "")
+
+
+def get_last_id_from_csv(filename, default_start=0):
+    if not os.path.exists(filename):
+        print(f"ℹ️ Plik {filename} nie istnieje. Zaczynam od domyślnego ID: {default_start}")
+        return default_start
+    max_id = 0
+    try:
+        with open(filename, "r", encoding="utf-8") as f:
+            reader = csv.DictReader(f)
+            for row in reader:
+                try:
+                    row_val = row.get("ID", 0)
+                    if row_val:
+                        current_id = int(row_val)
+                        if current_id > max_id:
+                            max_id = current_id
+                except (ValueError, TypeError):
+                    continue
+    except Exception as e:
+        print(f"⚠️ Błąd odczytu ostatniego ID z pliku: {e}")
+        return default_start
+    final_id = max(max_id, default_start)
+    print(f"ℹ️ Ostatnie znalezione ID w pliku: {max_id}. Użyję w filtrze > {final_id}")
+    return final_id
+
+
+def extract_tgstack_from_log_url(log_url):
+    if not log_url:
+        return ""
+    try:
+        response = requests.get(log_url, timeout=10)
+        response.raise_for_status()
+        content = response.content.decode('utf-8', errors='replace')
+        for line in content.splitlines():
+            clean_line = line.strip()
+            if "X-CTMG-TGStack" in clean_line:
+                parts = clean_line.split(":", 1)
+                if len(parts) > 1:
+                    return parts[1].strip()
+        return "Not Found"
+    except Exception as e:
+        return f"Error: {str(e)[:50]}"
+
+
+def fetch_telephony_stats_with_logs(csv_filename):
+    """
+    Pobiera statystyki połączeń, logi, źródła (TG_STACK) i mapuje PORTAL_NUMBER.
+    """
+    last_known_id = get_last_id_from_csv(csv_filename, default_start=0)
+    print(f">>> Rozpoczynam pobieranie telefonii. Będę szukał rekordów z ID > {last_known_id}")
+
+    file_exists = os.path.exists(csv_filename)
+
+    # ZAKTUALIZOWANE NAGŁÓWKI: Dodano "PORTAL_MAPPED"
+    fieldnames = [
+        "ID",
+        "PORTAL_NUMBER",
+        "PORTAL_MAPPED",  # <--- Nowa kolumna
+        "PHONE_NUMBER",
+        "CALL_START_DATE",
+        "SOURCE",
+        "TG_STACK",
+        "CALL_LOG_URL"
+    ]
+
+    with open(csv_filename, "a" if file_exists else "w", newline="", encoding="utf-8") as f:
+        writer = csv.DictWriter(f, fieldnames=fieldnames)
+        if not file_exists:
+            writer.writeheader()
+
+        total_processed = 0
+        current_pagination_start = 2300  # lub 0, jeśli chcesz pewności
+
+        while True:
+            params = {
+                "order": {"ID": "ASC"},
+                "filter": {">ID": last_known_id},
+                "select": ["ID", "PORTAL_NUMBER", "PHONE_NUMBER", "CALL_START_DATE", "CALL_LOG"],
+                "start": current_pagination_start
+            }
+            r = bitrix_call(BitrixConfig.WEBHOOK_URL_TELEPHONY_GET, "voximplant.statistic.get.json", params)
+            if "error" in r:
+                print(f"❌ Błąd API: {r}")
+                break
+            batch = r.get("result", [])
+            if not batch:
+                print("--- Brak nowych danych (pusta partia) ---")
+                break
+
+            rows_to_save = []
+            print(f"📥 Pobrano stronę (start={current_pagination_start}), {len(batch)} rekordów. Przetwarzanie logów...")
+
+            for item in batch:
+                call_id = item.get("ID")
+                call_log_url = item.get("CALL_LOG", "")
+
+                # 1. Pobieranie PORTAL_NUMBER
+                portal_raw = item.get("PORTAL_NUMBER", "")
+
+                # 2. Mapowanie PORTAL_NUMBER na przyjazną nazwę
+                portal_mapped_value = map_portal_number(portal_raw)
+
+                # 3. Pobieranie logów i TG_STACK
+                tg_stack_value = extract_tgstack_from_log_url(call_log_url)
+
+                # 4. Mapowanie SOURCE z TG_STACK
+                source_label = parse_source_from_tgstack(tg_stack_value)
+
+                row = {
+                    "ID": call_id,
+                    "PORTAL_NUMBER": portal_raw,
+                    "PORTAL_MAPPED": portal_mapped_value,  # <--- Zapis wyniku do CSV
+                    "PHONE_NUMBER": item.get("PHONE_NUMBER", ""),
+                    "CALL_START_DATE": item.get("CALL_START_DATE", ""),
+                    "SOURCE": source_label,
+                    "TG_STACK": tg_stack_value,
+                    "CALL_LOG_URL": call_log_url
+                }
+                rows_to_save.append(row)
+
+            writer.writerows(rows_to_save)
+            f.flush()
+            total_processed += len(rows_to_save)
+            print(f"✅ Zapisano {len(rows_to_save)} rekordów. Łącznie w tej sesji: {total_processed}")
+
+            if "next" in r:
+                current_pagination_start = r["next"]
+            else:
+                print("--- Koniec danych (brak parametru 'next' w API) ---")
+                break
+
 # --- MAIN ---
 
 def main():
@@ -607,12 +770,13 @@ def main():
     print("6. Dodaj nowy kontakt (Import)")
     print("7. Zaktualizuj nazwy firm (Dodaj NIP do nazwy, jeśli go brak)")
     print("8. Pobierz firmy po industry")
+    print("9. Pobierz statystyki telefonii + dane z logów (Incremental)")
 
-    choice = input("Wybierz opcję (1/7): ").strip()
+    choice = input("Wybierz opcję (1/9): ").strip()
 
     if choice == "1":
         FILE_FINAL = "companies_full_export.csv"
-        companies_data = fetch_all_companies_optimized()
+        companies_data = fetch_all_companies_optimized(5700)
         if companies_data:
             process_companies_with_users(companies_data, FILE_FINAL)
 
@@ -678,6 +842,10 @@ def main():
 
     elif choice == "8":
         fetch_companies_by_industry("NOTPROFIT")
+
+    elif choice == "9":
+        TELEPHONY_FILE = "telephony_stats_full.csv"
+        fetch_telephony_stats_with_logs(TELEPHONY_FILE)
 
     else:
         print("Nieprawidłowy wybór.")
