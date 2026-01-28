@@ -615,7 +615,6 @@ def parse_source_from_tgstack(tg_stack_str):
     return ""
 
 
-# --- NOWA FUNKCJA: Mapowanie Portal Number ---
 def map_portal_number(portal_number_str):
     """
     Sprawdza czy portal_number_str (np. 'reg66825') istnieje w słowniku PORTAL_NUMBERS.
@@ -674,17 +673,19 @@ def extract_tgstack_from_log_url(log_url):
 def fetch_telephony_stats_with_logs(csv_filename):
     """
     Pobiera statystyki połączeń, logi, źródła (TG_STACK) i mapuje PORTAL_NUMBER.
+    Zawiera logikę 'Seeking': jeśli pobrana strona zawiera tylko stare ID,
+    pomija ją i szuka dalej, inkrementując parametr start.
     """
     last_known_id = get_last_id_from_csv(csv_filename, default_start=0)
-    print(f">>> Rozpoczynam pobieranie telefonii. Będę szukał rekordów z ID > {last_known_id}")
+    print(f">>> Rozpoczynam pobieranie telefonii. Ostatnie znane ID: {last_known_id}")
 
     file_exists = os.path.exists(csv_filename)
 
-    # ZAKTUALIZOWANE NAGŁÓWKI: Dodano "PORTAL_MAPPED"
     fieldnames = [
         "ID",
+        "CRM_ENTITY_ID",
         "PORTAL_NUMBER",
-        "PORTAL_MAPPED",  # <--- Nowa kolumna
+        "PORTAL_MAPPED",
         "PHONE_NUMBER",
         "CALL_START_DATE",
         "SOURCE",
@@ -698,47 +699,84 @@ def fetch_telephony_stats_with_logs(csv_filename):
             writer.writeheader()
 
         total_processed = 0
-        current_pagination_start = 2300  # lub 0, jeśli chcesz pewności
+
+        # Sugeruję zacząć od 0, jeśli polegamy na filtrze,
+        # ale logika poniżej obsłuży "doganianie" jeśli API zignoruje filtr.
+        start = 2350
+
+        step = 50  # Standardowa wielkość strony w Bitrix
 
         while True:
             params = {
                 "order": {"ID": "ASC"},
-                "filter": {">ID": last_known_id},
-                "select": ["ID", "PORTAL_NUMBER", "PHONE_NUMBER", "CALL_START_DATE", "CALL_LOG"],
-                "start": current_pagination_start
+                "filter": {">ID": last_known_id},  # Filtr API (optymalizacja po stronie serwera)
+                "select": ["ID", "CRM_ENTITY_ID", "PORTAL_NUMBER", "PHONE_NUMBER", "CALL_START_DATE", "CALL_LOG",],
+                "start": start
             }
+
+            print(f"🔍 Pobieram stronę: start={start} ...")
             r = bitrix_call(BitrixConfig.WEBHOOK_URL_TELEPHONY_GET, "voximplant.statistic.get.json", params)
+
             if "error" in r:
                 print(f"❌ Błąd API: {r}")
                 break
+
             batch = r.get("result", [])
+
+            # --- LOGIKA SEEKING (Szukanie nowych ID) ---
             if not batch:
-                print("--- Brak nowych danych (pusta partia) ---")
+                print("--- Brak danych (pusta tablica result) - koniec ---")
                 break
 
+            # Wyciągamy wszystkie ID z obecnej paczki
+            try:
+                batch_ids = [int(item.get("ID", 0)) for item in batch]
+                max_batch_id = max(batch_ids) if batch_ids else 0
+            except ValueError:
+                max_batch_id = 0
+
+            # KLUCZOWA ZMIANA:
+            # Jeśli maksymalne ID w tej paczce jest mniejsze lub równe temu, co już mamy,
+            # to znaczy, że jesteśmy "za nisko" w historii. Przeskakujemy dalej.
+            if max_batch_id <= last_known_id:
+                print(
+                    f"⏩ Strona zawiera tylko stare dane (Max ID w paczce: {max_batch_id} <= Ostatnie znane: {last_known_id}).")
+
+                # Sprawdzenie czy to koniec danych w ogóle
+                if len(batch) < step and "next" not in r:
+                    print("--- Dotarto do końca danych (brak parametru next i niepełna paczka), brak nowych ID. ---")
+                    break
+
+                print(f"   Inkrementuję start o {step} i szukam dalej...")
+                start += step
+                continue  # Wracamy na początek pętli while, pomijając przetwarzanie
+
+            # --- KONIEC LOGIKI SEEKING ---
+
+            # Jeśli doszliśmy tutaj, to w paczce są jakieś nowe rekordy (przynajmniej jeden)
             rows_to_save = []
-            print(f"📥 Pobrano stronę (start={current_pagination_start}), {len(batch)} rekordów. Przetwarzanie logów...")
+            print(f"📥 Pobrano {len(batch)} rekordów. Przetwarzanie (nowe ID > {last_known_id})...")
 
             for item in batch:
-                call_id = item.get("ID")
-                call_log_url = item.get("CALL_LOG", "")
+                call_id = int(item.get("ID", 0))
 
-                # 1. Pobieranie PORTAL_NUMBER
+                # Dodatkowe zabezpieczenie: przetwarzamy tylko faktycznie nowsze rekordy
+                if call_id <= last_known_id:
+                    continue
+
+                lead_id = item.get("CRM_ENTITY_ID")
+                call_log_url = item.get("CALL_LOG", "")
                 portal_raw = item.get("PORTAL_NUMBER", "")
 
-                # 2. Mapowanie PORTAL_NUMBER na przyjazną nazwę
                 portal_mapped_value = map_portal_number(portal_raw)
-
-                # 3. Pobieranie logów i TG_STACK
                 tg_stack_value = extract_tgstack_from_log_url(call_log_url)
-
-                # 4. Mapowanie SOURCE z TG_STACK
                 source_label = parse_source_from_tgstack(tg_stack_value)
 
                 row = {
                     "ID": call_id,
+                    "CRM_ENTITY_ID": lead_id,
                     "PORTAL_NUMBER": portal_raw,
-                    "PORTAL_MAPPED": portal_mapped_value,  # <--- Zapis wyniku do CSV
+                    "PORTAL_MAPPED": portal_mapped_value,
                     "PHONE_NUMBER": item.get("PHONE_NUMBER", ""),
                     "CALL_START_DATE": item.get("CALL_START_DATE", ""),
                     "SOURCE": source_label,
@@ -747,15 +785,19 @@ def fetch_telephony_stats_with_logs(csv_filename):
                 }
                 rows_to_save.append(row)
 
-            writer.writerows(rows_to_save)
-            f.flush()
-            total_processed += len(rows_to_save)
-            print(f"✅ Zapisano {len(rows_to_save)} rekordów. Łącznie w tej sesji: {total_processed}")
-
-            if "next" in r:
-                current_pagination_start = r["next"]
+            if rows_to_save:
+                writer.writerows(rows_to_save)
+                f.flush()
+                total_processed += len(rows_to_save)
+                print(f"✅ Zapisano {len(rows_to_save)} nowych rekordów. Łącznie w sesji: {total_processed}")
             else:
-                print("--- Koniec danych (brak parametru 'next' w API) ---")
+                print("ℹ️ Pobrana paczka zawierała dane, ale wszystkie zostały odfiltrowane (duplikaty ID?).")
+
+            # Obsługa paginacji
+            if "next" in r:
+                start = r["next"]
+            else:
+                print("--- Koniec danych (brak parametru 'next') ---")
                 break
 
 # --- MAIN ---
