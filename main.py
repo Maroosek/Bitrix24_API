@@ -4,14 +4,18 @@ import re
 import requests
 import csv
 import time
+from datetime import datetime
 from config import BitrixConfig
 from config import TelephonyConfig
+
+#TEST
+import re
+from pymongo import MongoClient, DESCENDING
 
 #TODO tidy this up for actual use in API
 
 # Parametry SELECT
 SELECT_PARAMS = ["*", "UF_*", "PHONE", "EMAIL", "WEB"]
-
 
 # --- Funkcje pomocnicze ---
 
@@ -168,7 +172,7 @@ def fetch_all_companies_optimized(start: int):
         }
 
         # Tutaj wywołujemy naszą bezpieczną funkcję z retry
-        r = bitrix_call(BitrixConfig.WEBHOOK_URL, "crm.company.list.json", params)
+        r = bitrix_call(BitrixConfig.NEW_WEBHOOK_URL, "crm.company.list.json", params)
 
         if "error" in r:
             print(f"Przerwano pobieranie z powodu błędu: {r}")
@@ -346,6 +350,53 @@ def process_companies_with_users(raw_companies, final_output_file):
             row["ASSIGNED_BY_ID"] = user_map[str(a_id)]
 
     save_to_csv(final_output_file, raw_companies)
+
+
+def add_new_activity(
+        owner_id,  # ID elementu nadrzędnego (np. Deal ID)
+        owner_type_id,  # Typ elementu (1=Lead, 2=Deal, 3=Contact, 4=Company)
+        responsible_id,  # ID osoby odpowiedzialnej
+        description,  # Treść (może zawierać BBCode)
+        subject="SMS odebrany",
+        provider_id="CRM_TODO",
+        provider_type_id="TODO",
+        completed="N",  # Czy zadanie jest zakończone (Y/N)
+        direction="1"  # 1 = Przychodzące, 2 = Wychodzące
+):
+    """
+    Dodaje nową aktywność (np. notatkę o SMS, zadanie) do CRM.
+    """
+    print(f"🚀 Wysyłam nową aktywność: '{subject}' dla ID {owner_id}...")
+
+    # Budowanie struktury 'fields'
+    fields = {
+        "OWNER_ID": owner_id,
+        "OWNER_TYPE_ID": owner_type_id,
+        "PROVIDER_ID": provider_id,
+        "PROVIDER_TYPE_ID": provider_type_id,
+        "SUBJECT": subject,
+        "RESPONSIBLE_ID": responsible_id,
+        "DESCRIPTION": description,
+        "COMPLETED": completed,
+        "DIRECTION": direction
+    }
+
+    # Wywołanie API
+    # Używamy metody crm.activity.add
+    print("Dane aktywności: ", fields)
+
+    # Zakładam użycie standardowego WEBHOOK_URL, chyba że masz dedykowany dla Activity
+    url_base = getattr(BitrixConfig, 'WEBHOOK_URL_ACTIVITY_ADD', BitrixConfig.WEBHOOK_URL)
+
+    result = bitrix_call(url_base, "crm.activity.add.json", {"fields": fields})
+
+    if "result" in result:
+        new_id = result["result"]
+        print(f"✅ Sukces! Dodano aktywność. ID: {new_id}")
+        return new_id
+    else:
+        print(f"❌ Błąd podczas dodawania aktywności: {result}")
+        return None
 
 
 def add_new_contact(
@@ -800,6 +851,302 @@ def fetch_telephony_stats_with_logs(csv_filename):
                 print("--- Koniec danych (brak parametru 'next') ---")
                 break
 
+
+# ----- Funkcja do fakturacji -----
+
+# --- KROK 3: Pobieranie Dealów (Szans sprzedaży) według kategorii ---
+
+def fetch_deal_categories():
+    """
+    Pobiera listę dostępnych kategorii (lejków sprzedaży) z CRM.
+    Uwaga: Metoda crm.dealcategory.list zwraca tylko niestandardowe lejki.
+    Domyślny lejek ogólny ma zawsze ID = 0 i trzeba go uwzględnić ręcznie.
+    """
+    print(">>> Pobieranie listy kategorii dealów (lejków)...")
+    categories = []
+
+    # Domyślny lejek w Bitrix24 zawsze ma ID 0, ale endpoint .list często go nie zwraca.
+    # Dodajemy go ręcznie, aby pobrać też deale z głównego widoku.
+    categories.append({"ID": 0, "NAME": "Domyślny (Ogólny)"})
+
+    start = 0
+    while True:
+        params = {
+            "order": {"ID": "ASC"},
+            "select": ["ID", "NAME"],
+            "start": start
+        }
+
+        # Używamy Twojej konfiguracji URL (zakładam, że dealcategory jest pod standardowym endpointem lub głównym webhookiem)
+        r = bitrix_call(BitrixConfig.WEBHOOK_URL, "crm.dealcategory.list.json", params)
+
+        if "error" in r:
+            print(f"Błąd pobierania kategorii: {r}")
+            break
+
+        batch = r.get("result", [])
+        if not batch:
+            break
+
+        categories.extend(batch)
+
+        if "next" not in r:
+            break
+        start = r["next"]
+
+    print(f"✅ Znaleziono łącznie {len(categories)} kategorii (w tym domyślną).")
+    return categories
+
+
+def fetch_deals_by_category(category_id, category_name="Nieznana"):
+    """
+    Pobiera wszystkie deale należące do konkretnego ID kategorii.
+    """
+    print(f"🔍 Pobieranie dealów dla kategorii ID: {category_id} ({category_name})...")
+
+    deals = []
+    start = 0
+    total_fetched = 0
+
+    while True:
+        params = {
+            "order": {"ID": "ASC"},
+            "filter": {"CATEGORY_ID": category_id},  # Filtrowanie po kategorii zgodnie z życzeniem
+            "select": ["*", "UF_*"],  # Pobieramy wszystkie pola standardowe i customowe
+            "start": start
+        }
+
+        r = bitrix_call(BitrixConfig.WEBHOOK_URL, "crm.deal.list.json", params)
+
+        if "error" in r:
+            print(f"❌ Błąd pobierania dealów dla kat. {category_id}: {r}")
+            break
+
+        batch = r.get("result", [])
+        if not batch:
+            break
+
+        # Opcjonalnie: Możemy dodać nazwę kategorii do każdego rekordu, żeby w CSV było wiadomo skąd pochodzi
+        for deal in batch:
+            deal['CATEGORY_NAME_EXPORT'] = category_name
+            deals.append(deal)
+
+        batch_count = len(batch)
+        total_fetched += batch_count
+        # print(f"   Pobrano partię {batch_count} dealów...")
+
+        if "next" in r:
+            start = r["next"]
+        else:
+            break
+
+    print(f"   Zakończono kategorię {category_id}. Pobrano łącznie: {total_fetched} dealów.")
+    return deals
+
+
+def process_all_deals_by_categories(output_file):
+    """
+    1. Pobiera listę kategorii.
+    2. Dla każdej kategorii pobiera listę dealów.
+    3. Zapisuje wszystko do jednego pliku CSV.
+    """
+    categories = fetch_deal_categories()
+    all_deals_accumulated = []
+
+    for cat in categories:
+        c_id = cat.get("ID")
+        c_name = cat.get("NAME", str(c_id))
+
+        cat_deals = fetch_deals_by_category(c_id, c_name)
+        all_deals_accumulated.extend(cat_deals)
+
+    print(f"\n📊 Podsumowanie: Pobrano łącznie {len(all_deals_accumulated)} dealów ze wszystkich kategorii.")
+
+    if all_deals_accumulated:
+
+        all_deals_accumulated = generate_custom_signatures(all_deals_accumulated)
+        save_to_csv(output_file, all_deals_accumulated)
+    else:
+        print("Brak dealów do zapisania.")
+
+
+def generate_custom_signatures(deals_list):
+    """
+    Przetwarza listę dealów i dodaje pole 'CUSTOM_SIGNATURE' w formacie:
+    NUMER WŁASNY/KLIENT/ŹRÓDŁO/DZIAŁ/NR HANDLOWCA/DZIEŃ/MIESIĄC/ROK
+
+    Logika KLIENT (NK/SK):
+    Sortujemy deale po dacie utworzenia. Pierwsze wystąpienie firmy lub kontaktu
+    w tym zbiorze to NK (Nowy), każde kolejne to SK (Stary).
+    """
+    print(">>> Generowanie numerów własnych i oznaczanie NK/SK...")
+
+    # 1. Sortujemy listę chronologicznie (po ID lub dacie utworzenia),
+    # aby poprawnie wykryć, który deal był pierwszy (NK)
+    # Zakładamy, że wyższe ID = późniejsza data.
+    deals_list.sort(key=lambda x: int(x.get('ID', 0)))
+
+    seen_clients = set()  # Tu przechowujemy ID firm/kontaktów, które już widzieliśmy
+
+    for deal in deals_list:
+        # --- A. Logika NK / SK ---
+        company_id = deal.get('COMPANY_ID', '0')
+        contact_id = deal.get('CONTACT_ID', '0')
+
+        # Klucze do sprawdzenia w historii (używamy prefiksu, żeby nie pomylić firmy ID 5 z kontaktem ID 5)
+        comp_key = f"COMP_{company_id}" if company_id and str(company_id) != "0" else None
+        cont_key = f"CONT_{contact_id}" if contact_id and str(contact_id) != "0" else None
+
+        is_old_client = False
+
+        # Sprawdzamy czy widzieliśmy już tę firmę
+        if comp_key and comp_key in seen_clients:
+            is_old_client = True
+        # Lub czy widzieliśmy ten kontakt (jeśli firma nie jest przypisana)
+        elif cont_key and cont_key in seen_clients:
+            is_old_client = True
+
+        client_code = "SK" if is_old_client else "NK"
+
+        # Dodajemy do historii wystąpień
+        if comp_key:
+            seen_clients.add(comp_key)
+        if cont_key:
+            seen_clients.add(cont_key)
+
+        # --- B. Pobieranie Daty (CLOSEDATE) ---
+        # Format Bitrixa to zazwyczaj "YYYY-MM-DDT..." lub "YYYY-MM-DD"
+        close_date_raw = deal.get('CLOSEDATE', '')
+        day, month, year = "00", "00", "0000"
+
+        if close_date_raw:
+            # Bierzemy pierwsze 10 znaków (YYYY-MM-DD)
+            date_part = str(close_date_raw)[:10]
+            try:
+                # Rozbijamy stringa
+                y_temp, m_temp, d_temp = date_part.split('-')
+                day, month, year = d_temp, m_temp, y_temp
+            except ValueError:
+                pass  # Jeśli format jest dziwny, zostają zera
+
+        # --- C. Reszta pól ---
+        deal_id = deal.get('ID', '')
+        source_code = "BRAK"  # Testowo, zgodnie z wytycznymi
+        category_id = deal.get('CATEGORY_ID', '0')  # Dział
+        created_by = deal.get('CREATED_BY_ID', '0')  # Handlowiec
+
+        # --- D. Złożenie ciągu ---
+        # Wzór: ID/KLIENT/ŹRÓDŁO/DZIAŁ/NR HANDLOWCA/DZIEŃ/MIESIĄC/ROK
+        signature = f"{deal_id}/{client_code}/{source_code}/{category_id}/{created_by}/{day}/{month}/{year}"
+
+        # Zapisujemy do słownika (będzie to nowa kolumna w CSV)
+        deal['GENERATED_SIGNATURE'] = signature
+
+    return deals_list
+
+
+def clean_phone_number(phone):
+    """
+    Usuwa WSZYSTKIE znaki niebędące cyframi.
+    Usuwa '+', spacje, myślniki, nawiasy.
+    Zmienia: "+48 500-123-456" -> "48500123456"
+    Zmienia: "48500123456"     -> "48500123456"
+    """
+    if not phone:
+        return ""
+    # [^0-9] oznacza: znajdź wszystko co nie jest cyfrą i zamień na pusty string
+    return re.sub(r"[^0-9]", "", str(phone))
+
+
+def find_owner_by_incoming_sms(mongo_uri, db_name, collection_name):
+    """
+    1. Pobiera ostatni SMS z Mongo.
+    2. Szuka w historii Bitrixa (CRM_SMS), do jakiego Deala/Leada (OWNER_ID)
+       wysyłaliśmy wiadomość na ten numer.
+    """
+
+    # --- KROK 1: Pobranie numeru z MongoDB ---
+    print(">>> 1. Łączenie z MongoDB...")
+    try:
+        client = MongoClient(mongo_uri)
+        db = client[db_name]
+        collection = db[collection_name]
+
+        # Pobierz JEDEN najnowszy rekord
+        last_sms = collection.find_one(sort=[("received_at", DESCENDING)])
+
+        if not last_sms:
+            print("❌ Błąd: Nie znaleziono żadnych wiadomości w bazie MongoDB.")
+            return None
+
+        # Pobieramy numer nadawcy z Mongo
+        raw_sms_from = last_sms.get('sms_from')
+        clean_sms_from = clean_phone_number(raw_sms_from)
+
+        print(f"✅ Znaleziono w Mongo najnowszy SMS od: {raw_sms_from} (Clean: {clean_sms_from})")
+
+    except Exception as e:
+        print(f"❌ Błąd połączenia z MongoDB: {e}")
+        return None
+
+    # --- KROK 2: Pobranie aktywności z Bitrix24 ---
+    print(f">>> 2. Szukanie pasującego Deal'a w Bitrix24 dla numeru {clean_sms_from}...")
+
+    # Pobieramy tylko aktywności typu SMS, sortując od najnowszych (ID DESC),
+    # żeby znaleźć ostatnią interakcję.
+    params = {
+        "order": {"ID": "DESC"},
+        "filter": {
+            "PROVIDER_ID": "CRM_SMS",
+        },
+        "select": ["ID", "OWNER_ID", "OWNER_TYPE_ID", "SETTINGS", "SUBJECT", "created"]
+    }
+
+    # Używamy Twojej funkcji bitrix_call (zakładam, że jest dostępna w scope)
+    # Jeśli nie, podmień BitrixConfig.WEBHOOK_URL na swój URL
+    result = bitrix_call(BitrixConfig.WEBHOOK_URL, "crm.activity.list.json", params)
+
+    if "error" in result:
+        print(f"❌ Błąd API Bitrix: {result}")
+        return None
+
+    activities = result.get("result", [])
+
+    # --- KROK 3: Porównywanie numerów ---
+
+    for activity in activities:
+        # Bezpieczne wejście w zagnieżdżoną strukturę JSON-a
+        settings = activity.get("SETTINGS", {})
+        # Struktura może być listą (pustą) lub słownikiem, w JSON z przykładu jest słownikiem gdy ma dane
+        if isinstance(settings, list):
+            continue
+
+        original_msg = settings.get("ORIGINAL_MESSAGE", {})
+        bitrix_message_to = original_msg.get("MESSAGE_TO", "")
+
+        # Czyścimy numer z Bitrixa
+        clean_bitrix_to = clean_phone_number(bitrix_message_to)
+
+        # Porównujemy numery
+        # Sprawdzamy czy numer z Mongo (sms_from) jest taki sam jak ten, do którego pisaliśmy (message_to)
+        if clean_bitrix_to and clean_bitrix_to == clean_sms_from:
+            owner_id = activity.get("OWNER_ID")
+            owner_type_id = activity.get("OWNER_TYPE_ID")
+
+            print(f"✅ SUKCES! Znaleziono dopasowanie.")
+            print(f"   Aktywność ID: {activity['ID']}")
+            print(f"   Numer w Bitrix: {bitrix_message_to}")
+            print(f"   OWNER_ID (Deal/Lead): {owner_id}")
+            print(f"   OWNER_TYPE_ID: {owner_type_id}")
+
+            return {
+                "OWNER_ID": owner_id,
+                "OWNER_TYPE_ID": owner_type_id
+            }
+
+    print("⚠️ Nie znaleziono w Bitrix aktywności SMS wysłanej na ten numer telefonu.")
+    return None
+
 # --- MAIN ---
 
 def main():
@@ -813,8 +1160,11 @@ def main():
     print("7. Zaktualizuj nazwy firm (Dodaj NIP do nazwy, jeśli go brak)")
     print("8. Pobierz firmy po industry")
     print("9. Pobierz statystyki telefonii + dane z logów (Incremental)")
+    print("10. Pobierz DEALE według kategorii do CSV")
+    print("11. Dodaj testową aktywność (SMS odebrany)")  # <--- NOWA OPCJA
+    print("12. Pobierz owner id itd")
 
-    choice = input("Wybierz opcję (1/9): ").strip()
+    choice = input("Wybierz opcję (1/11): ").strip()
 
     if choice == "1":
         FILE_FINAL = "companies_full_export.csv"
@@ -888,6 +1238,35 @@ def main():
     elif choice == "9":
         TELEPHONY_FILE = "telephony_stats_full.csv"
         fetch_telephony_stats_with_logs(TELEPHONY_FILE)
+
+    elif choice == "10":
+        # --- NOWA OPCJA ---
+        DEALS_FILE = "deals_full_export.csv"
+        process_all_deals_by_categories(DEALS_FILE)
+
+    elif choice == "11":
+        # --- NOWA OPCJA: Dodawanie aktywności ---
+        add_new_activity(
+            owner_id="2713",  # Twoje OWNER_ID
+            owner_type_id="2",  # Twoje OWNER_TYPE_ID (2 = Deal)
+            responsible_id="223",  # Twoje RESPONSIBLE_ID
+            subject="SMS odebrany",  # Twoje SUBJECT
+            description="[p]\nTest - Python\n[/p]",  # Twoje DESCRIPTION
+            provider_id="CRM_TODO",
+            provider_type_id="TODO"
+        )
+
+    elif choice == "12":
+
+        MONGO_URL = "mongodb+srv://europajena_db_user:dJZk2TmRjIh0Apaj@jenaeuropa.qnfx36r.mongodb.net/"
+        DB_NAME = "TelefoniaAPI"
+        COLLECTION = "smsReceived"
+
+        found_data = find_owner_by_incoming_sms(MONGO_URL, DB_NAME, COLLECTION)
+
+        if found_data:
+            # Tutaj możesz wywołać swoją funkcję add_new_activity
+            print("Można dodać notatkę do:", found_data)
 
     else:
         print("Nieprawidłowy wybór.")
