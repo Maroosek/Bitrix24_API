@@ -974,75 +974,109 @@ def generate_custom_signatures(deals_list):
     """
     Przetwarza listę dealów i dodaje pole 'CUSTOM_SIGNATURE' w formacie:
     NUMER WŁASNY/KLIENT/ŹRÓDŁO/DZIAŁ/NR HANDLOWCA/DZIEŃ/MIESIĄC/ROK
-
-    Logika KLIENT (NK/SK):
-    Sortujemy deale po dacie utworzenia. Pierwsze wystąpienie firmy lub kontaktu
-    w tym zbiorze to NK (Nowy), każde kolejne to SK (Stary).
     """
-    print(">>> Generowanie numerów własnych i oznaczanie NK/SK...")
+    print(">>> Generowanie numerów własnych (NK/SK z flagi) i mapowanie źródeł...")
 
-    # 1. Sortujemy listę chronologicznie (po ID lub dacie utworzenia),
-    # aby poprawnie wykryć, który deal był pierwszy (NK)
-    # Zakładamy, że wyższe ID = późniejsza data.
+    # --- KONFIGURACJA ŹRÓDEŁ ---
+    # Tutaj możesz prosto dopisywać nowe mapowania.
+    # Klucz (lewa strona) to SOURCE_ID z systemu, Wartość (prawa) to tekst w sygnaturze.
+    SOURCE_MAPPING = {
+        'ADVERTISING': 'R',
+        'CALL': 'T',
+        'EMAIL': '@',
+        'WEB': 'S',  # Sugeruję unikać spacji w sygnaturach (np. zamiast "strona internetowa")
+        # 'STORE': 'SKLEP',   <- przykład dodania nowego
+    }
+
+    # Sortowanie nie jest już krytyczne dla logiki NK/SK (bo mamy flagę),
+    # ale można je zostawić dla porządku w pliku wynikowym.
     deals_list.sort(key=lambda x: int(x.get('ID', 0)))
 
-    seen_clients = set()  # Tu przechowujemy ID firm/kontaktów, które już widzieliśmy
-
     for deal in deals_list:
-        # --- A. Logika NK / SK ---
-        company_id = deal.get('COMPANY_ID', '0')
-        contact_id = deal.get('CONTACT_ID', '0')
+        # --- A. Logika NK / SK (na podstawie IS_RETURN_CUSTOMER) ---
+        # Zakładamy, że Y = Stary Klient (SK), N = Nowy Klient (NK)
+        is_return = deal.get('IS_RETURN_CUSTOMER', 'N')
 
-        # Klucze do sprawdzenia w historii (używamy prefiksu, żeby nie pomylić firmy ID 5 z kontaktem ID 5)
-        comp_key = f"COMP_{company_id}" if company_id and str(company_id) != "0" else None
-        cont_key = f"CONT_{contact_id}" if contact_id and str(contact_id) != "0" else None
+        if is_return == 'Y':
+            client_code = "SK"
+        else:
+            client_code = "NK"
 
-        is_old_client = False
+        # --- B. Mapowanie Źródła (SOURCE_ID) ---
+        source_id = deal.get('SOURCE_ID', '')
+        # Pobieramy nazwę ze słownika. Jeśli nie ma klucza, używamy "INNE" lub samego ID.
+        source_code = SOURCE_MAPPING.get(source_id, 'INNE')
 
-        # Sprawdzamy czy widzieliśmy już tę firmę
-        if comp_key and comp_key in seen_clients:
-            is_old_client = True
-        # Lub czy widzieliśmy ten kontakt (jeśli firma nie jest przypisana)
-        elif cont_key and cont_key in seen_clients:
-            is_old_client = True
-
-        client_code = "SK" if is_old_client else "NK"
-
-        # Dodajemy do historii wystąpień
-        if comp_key:
-            seen_clients.add(comp_key)
-        if cont_key:
-            seen_clients.add(cont_key)
-
-        # --- B. Pobieranie Daty (CLOSEDATE) ---
-        # Format Bitrixa to zazwyczaj "YYYY-MM-DDT..." lub "YYYY-MM-DD"
+        # --- C. Pobieranie Daty (CLOSEDATE) ---
         close_date_raw = deal.get('CLOSEDATE', '')
         day, month, year = "00", "00", "0000"
 
         if close_date_raw:
-            # Bierzemy pierwsze 10 znaków (YYYY-MM-DD)
             date_part = str(close_date_raw)[:10]
             try:
-                # Rozbijamy stringa
                 y_temp, m_temp, d_temp = date_part.split('-')
                 day, month, year = d_temp, m_temp, y_temp
             except ValueError:
-                pass  # Jeśli format jest dziwny, zostają zera
+                pass
 
-        # --- C. Reszta pól ---
+        # --- D. Reszta pól ---
         deal_id = deal.get('ID', '')
-        source_code = "BRAK"  # Testowo, zgodnie z wytycznymi
-        category_id = deal.get('CATEGORY_ID', '0')  # Dział
-        created_by = deal.get('CREATED_BY_ID', '0')  # Handlowiec
+        category_id = deal.get('CATEGORY_ID', '0')
+        created_by = deal.get('CREATED_BY_ID', '0')
 
-        # --- D. Złożenie ciągu ---
+        # --- E. Złożenie ciągu ---
         # Wzór: ID/KLIENT/ŹRÓDŁO/DZIAŁ/NR HANDLOWCA/DZIEŃ/MIESIĄC/ROK
         signature = f"{deal_id}/{client_code}/{source_code}/{category_id}/{created_by}/{day}/{month}/{year}"
 
-        # Zapisujemy do słownika (będzie to nowa kolumna w CSV)
         deal['GENERATED_SIGNATURE'] = signature
 
     return deals_list
+
+
+def export_invoice_legends():
+    """
+        Pobiera listę pracowników oraz kategorie dealów (lejki) i zapisuje je
+        do JEDNEGO pliku CSV jako legendę do faktur.
+        Format pliku: TYP, ID, NAZWA
+        """
+    print("\n--- GENEROWANIE WSPÓLNEJ LEGENDY (Pracownicy + Lejki) ---")
+
+    combined_rows = []
+
+    # --- 1. Pobieranie Pracowników ---
+    users = fetch_all_users()
+    for u in users:
+        # Sklejamy imię i nazwisko
+        full_name = f"{u.get('NAME', '')} {u.get('LAST_NAME', '')}".strip()
+        # Jeśli brak imienia, bierzemy email lub login
+        if not full_name:
+            full_name = u.get('EMAIL', u.get('LOGIN', 'Nieznany'))
+
+        combined_rows.append({
+            "TYP": "PRACOWNIK",
+            "ID": u.get("ID"),
+            "NAZWA": full_name
+        })
+
+    # --- 2. Pobieranie Kategorii Dealów (tzw. Branże/Lejki) ---
+    categories = fetch_deal_categories()
+    for cat in categories:
+        combined_rows.append({
+            "TYP": "BRANZA_LEJEK",  # Możesz tu wpisać "KATEGORIA" jeśli wolisz
+            "ID": cat.get("ID"),
+            "NAZWA": cat.get("NAME")
+        })
+
+    # --- 3. Zapis do jednego pliku ---
+    if combined_rows:
+        filename = "legenda_faktury_wspolna.csv"
+        # Sortujemy dla porządku: najpierw po TYPIE, potem po ID
+        combined_rows.sort(key=lambda x: (x["TYP"], int(x["ID"]) if str(x["ID"]).isdigit() else x["ID"]))
+
+        save_to_csv(filename, combined_rows)
+        print(f"✅ Wygenerowano plik: {filename} ({len(combined_rows)} pozycji)")
+    else:
+        print("⚠️ Brak danych do zapisania.")
 
 
 def clean_phone_number(phone):
@@ -1058,7 +1092,7 @@ def clean_phone_number(phone):
     return re.sub(r"[^0-9]", "", str(phone))
 
 
-def find_owner_by_incoming_sms(mongo_uri, db_name, collection_name):
+def find_owner_by_incoming_sms_old(mongo_uri, db_name, collection_name):
     """
     1. Pobiera ostatni SMS z Mongo.
     2. Szuka w historii Bitrixa (CRM_SMS), do jakiego Deala/Leada (OWNER_ID)
@@ -1142,6 +1176,69 @@ def find_owner_by_incoming_sms(mongo_uri, db_name, collection_name):
             return {
                 "OWNER_ID": owner_id,
                 "OWNER_TYPE_ID": owner_type_id
+            }
+
+    print("⚠️ Nie znaleziono w Bitrix aktywności SMS wysłanej na ten numer telefonu.")
+    return None
+
+def find_owner_by_incoming_sms(phone_number): #used in actual API when receiving SMS
+    """
+    Szuka w historii Bitrixa (CRM_SMS), do jakiego Deala/Leada (OWNER_ID)
+    wysyłaliśmy wiadomość na ten numer.
+    Nie łączy się z Mongo - przyjmuje numer prosto z requestu.
+    """
+    clean_sms_from = clean_phone_number(phone_number)
+    print(f">>> Szukanie pasującego Deal'a w Bitrix24 dla numeru {clean_sms_from}...")
+
+    if not clean_sms_from:
+        print("❌ Pusty numer telefonu po czyszczeniu.")
+        return None
+
+    # Pobieramy aktywności SMS, sortując od najnowszych
+    # Dodalem RESPONSIBLE_ID do select, żeby wiedzieć kto opiekował się klientem
+    params = {
+        "order": {"ID": "DESC"},
+        "filter": {
+            "PROVIDER_ID": "CRM_SMS",
+        },
+        "select": ["ID", "OWNER_ID", "OWNER_TYPE_ID", "SETTINGS", "SUBJECT", "RESPONSIBLE_ID"]
+    }
+
+    result = bitrix_call(BitrixConfig.WEBHOOK_URL, "crm.activity.list.json", params)
+
+    if "error" in result:
+        print(f"❌ Błąd API Bitrix: {result}")
+        return None
+
+    activities = result.get("result", [])
+
+    for activity in activities:
+        settings = activity.get("SETTINGS", {})
+
+        # Zabezpieczenie przed pustą listą w settings (bug Bitrixa)
+        if isinstance(settings, list):
+            continue
+
+        original_msg = settings.get("ORIGINAL_MESSAGE", {})
+        bitrix_message_to = original_msg.get("MESSAGE_TO", "")
+
+        clean_bitrix_to = clean_phone_number(bitrix_message_to)
+
+        # Porównujemy numer z Bitrixa z numerem przychodzącym
+        if clean_bitrix_to and clean_bitrix_to == clean_sms_from:
+            owner_id = activity.get("OWNER_ID")
+            owner_type_id = activity.get("OWNER_TYPE_ID")
+            responsible_id = activity.get("RESPONSIBLE_ID")  # Pobieramy opiekuna
+
+            print(f"✅ SUKCES! Znaleziono dopasowanie.")
+            print(f"   Aktywność ID: {activity['ID']}")
+            print(f"   OWNER_ID: {owner_id} (Typ: {owner_type_id})")
+            print(f"   Opiekun: {responsible_id}")
+
+            return {
+                "OWNER_ID": owner_id,
+                "OWNER_TYPE_ID": owner_type_id,
+                "RESPONSIBLE_ID": responsible_id
             }
 
     print("⚠️ Nie znaleziono w Bitrix aktywności SMS wysłanej na ten numer telefonu.")
@@ -1243,6 +1340,7 @@ def main():
         # --- NOWA OPCJA ---
         DEALS_FILE = "deals_full_export.csv"
         process_all_deals_by_categories(DEALS_FILE)
+        export_invoice_legends()
 
     elif choice == "11":
         # --- NOWA OPCJA: Dodawanie aktywności ---
@@ -1262,7 +1360,7 @@ def main():
         DB_NAME = "TelefoniaAPI"
         COLLECTION = "smsReceived"
 
-        found_data = find_owner_by_incoming_sms(MONGO_URL, DB_NAME, COLLECTION)
+        found_data = find_owner_by_incoming_sms_old(MONGO_URL, DB_NAME, COLLECTION)
 
         if found_data:
             # Tutaj możesz wywołać swoją funkcję add_new_activity
