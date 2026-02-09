@@ -1,0 +1,11 @@
+﻿.idea/
+__pycache__/
+venv/
+.venv/
+*.csv
+*.json
+junk/
+DOCS/
+idk/
+idk2/
+config.py
