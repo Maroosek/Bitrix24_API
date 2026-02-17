@@ -1078,6 +1078,163 @@ def export_invoice_legends():
     else:
         print("⚠️ Brak danych do zapisania.")
 
+#Deale i telefonia
+def sanitize_filename(name):
+    """
+    Pomocnicza funkcja czyszcząca nazwę działu z niedozwolonych znaków dla systemu plików.
+    """
+    return re.sub(r'[\\/*?:"<>|]', "", str(name)).strip().replace(" ", "_")
+
+
+def fetch_deals_by_category_with_date(category_id, category_name, start_date_iso):
+    """
+    Pobiera deale dla wskazanej kategorii utworzone po określonej dacie.
+    """
+    print(f"🔍 Pobieranie dealów dla kategorii ID: {category_id} ({category_name}) od daty {start_date_iso}...")
+
+    deals = []
+    start = 0
+    total_fetched = 0
+
+    while True:
+        params = {
+            "order": {"ID": "ASC"},
+            "filter": {
+                "CATEGORY_ID": category_id,
+                ">=BEGINDATE": start_date_iso  # Czysty string, bez kodowania URL!
+            },
+            "select": ["*", "UF_*"],
+            "start": start
+        }
+
+        r = bitrix_call(BitrixConfig.NEW_WEBHOOK_URL, "crm.deal.list.json", params)
+
+        if "error" in r:
+            print(f"❌ Błąd pobierania dealów dla kat. {category_id}: {r}")
+            break
+
+        batch = r.get("result", [])
+        if not batch:
+            break
+
+        for deal in batch:
+            deal['CATEGORY_NAME_EXPORT'] = category_name
+            deals.append(deal)
+
+        batch_count = len(batch)
+        total_fetched += batch_count
+
+        if "next" in r:
+            start = r["next"]
+        else:
+            break
+
+    print(f"   Zakończono kategorię {category_id}. Pobrano łącznie: {total_fetched} dealów.")
+    return deals
+
+
+def enrich_deals_with_phones(deals_list):
+    """
+    Wyciąga ID kontaktów i firm z listy dealów, pobiera dla nich numery telefonów
+    w paczkach (zbiorczo) i dodaje do każdego deala pole 'CLIENT_PHONE'.
+    """
+    print(">>> Mapowanie numerów telefonów do pobranych dealów...")
+
+    contact_ids = set()
+    company_ids = set()
+
+    # Zbieramy unikalne ID kontaktów i firm
+    for deal in deals_list:
+        cid = deal.get("CONTACT_ID")
+        if cid:
+            contact_ids.add(cid)
+
+        comp_id = deal.get("COMPANY_ID")
+        if comp_id:
+            company_ids.add(comp_id)
+
+    phone_map_contacts = {}
+    phone_map_companies = {}
+
+    # Pobieranie telefonów dla KONTAKTÓW (w paczkach po 50)
+    if contact_ids:
+        c_list = list(contact_ids)
+        for i in range(0, len(c_list), 50):
+            chunk = c_list[i:i + 50]
+            # Operator '@ID' w filtrze pozwala wyszukać wiele ID naraz
+            params = {"filter": {"@ID": chunk}, "select": ["ID", "PHONE"]}
+            res = bitrix_call(BitrixConfig.WEBHOOK_URL, "crm.contact.list.json", params)
+
+            for contact in res.get("result", []):
+                phone_str = flatten_multifield(contact.get("PHONE"))
+                phone_map_contacts[str(contact["ID"])] = phone_str
+
+    # Pobieranie telefonów dla FIRM (w paczkach po 50)
+    if company_ids:
+        comp_list = list(company_ids)
+        for i in range(0, len(comp_list), 50):
+            chunk = comp_list[i:i + 50]
+            params = {"filter": {"@ID": chunk}, "select": ["ID", "PHONE"]}
+            res = bitrix_call(BitrixConfig.WEBHOOK_URL, "crm.company.list.json", params)
+
+            for company in res.get("result", []):
+                phone_str = flatten_multifield(company.get("PHONE"))
+                phone_map_companies[str(company["ID"])] = phone_str
+
+    # Doklejanie telefonów do dealów
+    for deal in deals_list:
+        cid = str(deal.get("CONTACT_ID", ""))
+        comp_id = str(deal.get("COMPANY_ID", ""))
+
+        phone = ""
+        # Priorytet ma telefon bezpośrednio z kontaktu. Jeśli go nie ma, bierzemy z firmy.
+        if cid and phone_map_contacts.get(cid):
+            phone = phone_map_contacts[cid]
+        elif comp_id and phone_map_companies.get(comp_id):
+            phone = phone_map_companies[comp_id]
+
+        # Zapisujemy telefon pod nowym kluczem, który trafi do CSV
+        deal["CLIENT_PHONE"] = phone
+
+    return deals_list
+
+
+def process_deals_separate_csv_from_date(start_date_iso):
+    """
+    1. Pobiera listę kategorii.
+    2. Pobiera deale od konkretnej daty dla każdej kategorii.
+    3. Zapisuje każdy dział do OSOBNEGO pliku CSV.
+    """
+    print(f"\n--- POBIERANIE DEALÓW OD DATY: {start_date_iso} DO OSOBNYCH PLIKÓW ---")
+    categories = fetch_deal_categories()
+
+    total_exported_deals = 0
+
+    for cat in categories:
+        c_id = cat.get("ID")
+        c_name = cat.get("NAME", f"Kategoria_{c_id}")
+
+        # Pobieramy deale dla tego jednego działu z filtrem daty
+        cat_deals = fetch_deals_by_category_with_date(c_id, c_name, start_date_iso)
+
+        if cat_deals:
+            # Używamy Twojej funkcji do generowania podpisów z flagami NK/SK
+            cat_deals = generate_custom_signatures(cat_deals)
+
+            # Tworzymy bezpieczną nazwę pliku
+            cat_deals = enrich_deals_with_phones(cat_deals)
+
+            safe_c_name = sanitize_filename(c_name)
+            filename = f"deals_{start_date_iso[:10]}_dzial_{c_id}_{safe_c_name}.csv"
+
+            save_to_csv(filename, cat_deals)
+            total_exported_deals += len(cat_deals)
+            print(f"✅ Zapisano plik: {filename} (rekordów: {len(cat_deals)})\n")
+        else:
+            print(f"ℹ️ Pominięto dział '{c_name}' - brak dealów spełniających kryteria.\n")
+
+    print(f"📊 PODSUMOWANIE: Zapisano łącznie {total_exported_deals} dealów w osobnych plikach CSV.")
+
 
 def clean_phone_number(phone):
     """
@@ -1260,6 +1417,7 @@ def main():
     print("10. Pobierz DEALE według kategorii do CSV")
     print("11. Dodaj testową aktywność (SMS odebrany)")  # <--- NOWA OPCJA
     print("12. Pobierz owner id itd")
+    print("13. Pobierz DEALE do OSOBNYCH CSV od wybranej daty")
 
     choice = input("Wybierz opcję (1/11): ").strip()
 
@@ -1365,6 +1523,13 @@ def main():
         if found_data:
             # Tutaj możesz wywołać swoją funkcję add_new_activity
             print("Można dodać notatkę do:", found_data)
+
+
+
+    elif choice == "13":
+        # Możesz zmienić datę poniżej na dowolną inną
+        TARGET_DATE = "2025-12-15T00:00:00+03:00"
+        process_deals_separate_csv_from_date(TARGET_DATE)
 
     else:
         print("Nieprawidłowy wybór.")
