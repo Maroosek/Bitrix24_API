@@ -80,7 +80,7 @@ def fetch_companies_by_industry(industry: str):
     print(f"🔍 Rozpoczynam poszukiwanie firm z branży: '{industry}'")
 
     # Pobieramy firmy (zachowałem Twój start=5300)
-    all_companies = fetch_all_companies_optimized(start=5300)
+    all_companies = fetch_all_companies_optimized(start=0, industry=industry, min_date_create="2025-12-01")
 
     valid_companies = []
     missing_address_count = 0
@@ -157,11 +157,16 @@ def fetch_companies_by_industry(industry: str):
     return valid_companies
 
 
-def fetch_all_companies_optimized(start: int):
-    print(">>> Rozpoczynam pobieranie firm...")
+def fetch_all_companies_optimized(start: int, industry: str = None, min_date_create: str = None):
+    print(f">>> Rozpoczynam pobieranie firm (start={start})...")
+
+    # Wyświetlamy aktywne filtry w logach, jeśli zostały podane
+    if industry:
+        print(f"    Aktywny filtr branży (INDUSTRY): {industry}")
+    if min_date_create:
+        print(f"    Aktywny filtr daty (>=DATE_CREATE): {min_date_create}")
 
     all_companies = []
-    #start = 7300
     total_fetched_count = 0
 
     while True:
@@ -170,6 +175,18 @@ def fetch_all_companies_optimized(start: int):
             "select": SELECT_PARAMS,
             "start": start
         }
+
+        # --- DYNAMICZNE BUDOWANIE FILTRÓW ---
+        api_filters = {}
+        if industry:
+            api_filters["INDUSTRY"] = industry
+        if min_date_create:
+            api_filters[">=DATE_CREATE"] = min_date_create
+
+        # Jeśli zdefiniowano jakiekolwiek filtry, dodajemy je do zapytania
+        if api_filters:
+            params["filter"] = api_filters
+        # ------------------------------------
 
         # Tutaj wywołujemy naszą bezpieczną funkcję z retry
         r = bitrix_call(BitrixConfig.NEW_WEBHOOK_URL, "crm.company.list.json", params)
@@ -1419,7 +1436,7 @@ def main():
     print("12. Pobierz owner id itd")
     print("13. Pobierz DEALE do OSOBNYCH CSV od wybranej daty")
 
-    choice = input("Wybierz opcję (1/11): ").strip()
+    choice = input("Wybierz opcję (1/13): ").strip()
 
     if choice == "1":
         FILE_FINAL = "companies_full_export.csv"
