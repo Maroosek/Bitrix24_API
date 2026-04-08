@@ -564,6 +564,46 @@ def add_new_company(
         return None
 
 
+def add_new_lead(
+        first_name,         # Imię
+        last_name,          # Nazwisko
+        phone=None,         # Telefon
+        contact_id=None,    # ID powiązanego kontaktu
+        assigned_by_id=161, # ID osoby odpowiedzialnej (domyślnie 161)
+):
+    """
+    Tworzy nowego leada w Bitrix24.
+    """
+    full_name = f"{first_name} {last_name}"
+    print(f"🚀 Wysyłam dane dla leada: {full_name}...")
+
+    fields = {
+        "NAME": first_name,
+        "LAST_NAME": last_name,
+        "TITLE": full_name,
+        "SOURCE_ID": "CALL",
+        "OPENED": "Y",
+        "ASSIGNED_BY_ID": assigned_by_id,
+    }
+
+    if contact_id:
+        fields["CONTACT_ID"] = contact_id
+
+    if phone:
+        fields["PHONE"] = [{"VALUE": phone, "VALUE_TYPE": "MOBILE"}]
+
+    print("Pola leada: ", fields)
+    result = bitrix_call(BitrixConfig.WEBHOOK_URL, "crm.lead.add.json", {"fields": fields})
+
+    if "result" in result:
+        new_id = result["result"]
+        print(f"✅ Sukces! Dodano nowego leada. ID: {new_id}")
+        return new_id
+    else:
+        print(f"❌ Błąd podczas dodawania leada: {result}")
+        return None
+
+
 def save_to_csv(filename, rows):
     if not rows:
         print("Brak danych do zapisu.")
@@ -1435,6 +1475,7 @@ def main():
     print("11. Dodaj testową aktywność (SMS odebrany)")  # <--- NOWA OPCJA
     print("12. Pobierz owner id itd")
     print("13. Pobierz DEALE do OSOBNYCH CSV od wybranej daty")
+    print("14. lead")
 
     choice = input("Wybierz opcję (1/13): ").strip()
 
@@ -1547,6 +1588,15 @@ def main():
         # Możesz zmienić datę poniżej na dowolną inną
         TARGET_DATE = "2025-12-15T00:00:00+03:00"
         process_deals_separate_csv_from_date(TARGET_DATE)
+
+    elif choice == "14":
+        add_new_lead(
+            first_name="marko",
+            last_name="KOPACZ",
+            phone="696969123",
+            contact_id=20393,
+            assigned_by_id=161,
+        )
 
     else:
         print("Nieprawidłowy wybór.")
