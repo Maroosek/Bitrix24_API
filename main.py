@@ -1659,15 +1659,15 @@ def main():
         TEST_PHONE = "888 788 525"
         TEST_USER_ID = 173  # Używam ID z Twojego przykładu add_new_lead
         # WAŻNE: Link musi być bezpośredni i publicznie dostępny dla serwera Bitrix
-        TEST_RECORD_URL = ""
+        TEST_RECORD_URL = "https://syntira.3cx.pl/recording/CfDJ8Dv6pDOgFtVBlePn6MEccwRKJH5B_seeAYafZ5b0hg6HU6XR-AVNaZGMVSz7Y4EISC45mnuux1viyk1H6Kkvv1JuulIi-OQox5VcHAy-7vI-VZBzDqNLVd4BP8tWGGqVdPvPQna_Eqv6pu64QDqvWgMvl-cJPuv22W1mKsmPzJe3ThF2BWAwHGPcvAiQqsxplRMHEpjfx0dE9d-rGDdVypQ"
 
         add_external_call_with_recording(
-            phone_number=TEST_PHONE, #Phone
-            user_id=TEST_USER_ID, #Responsible
-            record_url=TEST_RECORD_URL, #link
+            phone_number=TEST_PHONE, #Phone ten sam co klienta w leadzie
+            user_id=TEST_USER_ID, #Responsible ten sam na który trzeba przypisać
+            record_url=TEST_RECORD_URL, #link w tym samym miejscu co BitrixId
             duration=45, #useless
             entity_type="LEAD", #find out if lead or deal
-            entity_id=20897 #id of lead/deal
+            entity_id=21849 #id of lead/deal edytowany
         )
 
     else:
