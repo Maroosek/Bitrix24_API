@@ -226,7 +226,7 @@ def fetch_all_users():
     start = 0
 
     while True:
-        url_base = getattr(BitrixConfig, 'WEBHOOK_URL_USER_GET', BitrixConfig.WEBHOOK_URL)
+        url_base = getattr(BitrixConfig, 'NEW_WEBHOOK_URL', BitrixConfig.NEW_WEBHOOK_URL)
 
         # Również tutaj zadziała mechanizm retry
         r = bitrix_call(url_base, "user.get.json", {"start": start})
@@ -256,7 +256,7 @@ def fetch_all_fields():
     start = 0
 
     while True:
-        url_base = getattr(BitrixConfig, 'WEBHOOK_URL_FIELDS_GET', BitrixConfig.WEBHOOK_URL_FIELDS_GET)
+        url_base = getattr(BitrixConfig, 'NEW_WEBHOOK_URL', BitrixConfig.NEW_WEBHOOK_URL)
 
         # Również tutaj zadziała mechanizm retry
         r = bitrix_call(url_base, "crm.status.list.json", {"start": start})
@@ -285,8 +285,8 @@ def fetch_all_fields_contacts():
     start = 0
 
     while True:
-        url_base = getattr(BitrixConfig, 'WEBHOOK_URL_FIELDS_CONTACT_GET',
-                           BitrixConfig.WEBHOOK_URL_FIELDS_CONTACT_GET)
+        url_base = getattr(BitrixConfig, 'NEW_WEBHOOK_URL',
+                           BitrixConfig.NEW_WEBHOOK_URL)
 
         # Również tutaj zadziała mechanizm retry
         r = bitrix_call(url_base, "crm.contact.userfield.list.json", {"start": start})
@@ -315,8 +315,8 @@ def fetch_all_companies_contacts():
     total_fetched_count = 0
 
     while True:
-        url_base = getattr(BitrixConfig, 'WEBHOOK_URL_COMPANY_CONTACTS_GET',
-                           BitrixConfig.WEBHOOK_URL_COMPANY_CONTACTS_GET)
+        url_base = getattr(BitrixConfig, 'NEW_WEBHOOK_URL',
+                           BitrixConfig.NEW_WEBHOOK_URL)
 
         # Również tutaj zadziała mechanizm retry
         r = bitrix_call(url_base,
@@ -403,7 +403,7 @@ def add_new_activity(
     print("Dane aktywności: ", fields)
 
     # Zakładam użycie standardowego WEBHOOK_URL, chyba że masz dedykowany dla Activity
-    url_base = getattr(BitrixConfig, 'WEBHOOK_URL_ACTIVITY_ADD', BitrixConfig.WEBHOOK_URL)
+    url_base = getattr(BitrixConfig, 'NEW_WEBHOOK_URL', BitrixConfig.NEW_WEBHOOK_URL)
 
     result = bitrix_call(url_base, "crm.activity.add.json", {"fields": fields})
 
@@ -474,7 +474,7 @@ def add_new_contact(
     # Wywołanie API
     # Używamy metody crm.contact.add.json
     print("Dane kontaktu: ", fields)
-    result = bitrix_call(BitrixConfig.WEBHOOK_URL_CONTACT_ADD, "crm.contact.add.json", {"fields": fields})
+    result = bitrix_call(BitrixConfig.NEW_WEBHOOK_URL, "crm.contact.add.json", {"fields": fields})
 
     if "result" in result:
         new_id = result["result"]
@@ -553,7 +553,7 @@ def add_new_company(
     # Wywołanie API
     # Używamy metody crm.company.add
     print("Dodano: ", fields)
-    result = bitrix_call(BitrixConfig.WEBHOOK_URL, "crm.company.add.json", {"fields": fields})
+    result = bitrix_call(BitrixConfig.NEW_WEBHOOK_URL, "crm.company.add.json", {"fields": fields})
 
     if "result" in result:
         new_id = result["result"]
@@ -593,7 +593,7 @@ def add_new_lead(
         fields["PHONE"] = [{"VALUE": phone, "VALUE_TYPE": "MOBILE"}]
 
     print("Pola leada: ", fields)
-    result = bitrix_call(BitrixConfig.WEBHOOK_URL, "crm.lead.add.json", {"fields": fields})
+    result = bitrix_call(BitrixConfig.NEW_WEBHOOK_URL, "crm.lead.add.json", {"fields": fields})
 
     if "result" in result:
         new_id = result["result"]
@@ -651,7 +651,7 @@ def update_companies_titles_with_nip():
             "start": start
         }
 
-        r = bitrix_call(BitrixConfig.WEBHOOK_URL, "crm.company.list.json", params)
+        r = bitrix_call(BitrixConfig.NEW_WEBHOOK_URL, "crm.company.list.json", params)
 
         if "error" in r:
             print(f"❌ Przerwano pobieranie z powodu błędu: {r}")
@@ -685,7 +685,7 @@ def update_companies_titles_with_nip():
                     print(f"🔄 Aktualizacja ID {c_id}: '{title_str}' -> '{new_title}'")
 
                     # API call do aktualizacji
-                    update_res = bitrix_call(BitrixConfig.WEBHOOK_URL_COMPANY_UPDATE, "crm.company.update.json", {
+                    update_res = bitrix_call(BitrixConfig.NEW_WEBHOOK_URL, "crm.company.update.json", {
                         "id": c_id,
                         "fields": update_fields
                     })
@@ -823,7 +823,7 @@ def fetch_telephony_stats_with_logs(csv_filename):
             }
 
             print(f"🔍 Pobieram stronę: start={start} ...")
-            r = bitrix_call(BitrixConfig.WEBHOOK_URL_TELEPHONY_GET, "voximplant.statistic.get.json", params)
+            r = bitrix_call(BitrixConfig.NEW_WEBHOOK_URL, "voximplant.statistic.get.json", params)
 
             if "error" in r:
                 print(f"❌ Błąd API: {r}")
@@ -935,7 +935,7 @@ def fetch_deal_categories():
         }
 
         # Używamy Twojej konfiguracji URL (zakładam, że dealcategory jest pod standardowym endpointem lub głównym webhookiem)
-        r = bitrix_call(BitrixConfig.WEBHOOK_URL, "crm.dealcategory.list.json", params)
+        r = bitrix_call(BitrixConfig.NEW_WEBHOOK_URL, "crm.dealcategory.list.json", params)
 
         if "error" in r:
             print(f"Błąd pobierania kategorii: {r}")
@@ -973,7 +973,7 @@ def fetch_deals_by_category(category_id, category_name="Nieznana"):
             "start": start
         }
 
-        r = bitrix_call(BitrixConfig.WEBHOOK_URL, "crm.deal.list.json", params)
+        r = bitrix_call(BitrixConfig.NEW_WEBHOOK_URL, "crm.deal.list.json", params)
 
         if "error" in r:
             print(f"❌ Błąd pobierania dealów dla kat. {category_id}: {r}")
@@ -1220,7 +1220,7 @@ def enrich_deals_with_phones(deals_list):
             chunk = c_list[i:i + 50]
             # Operator '@ID' w filtrze pozwala wyszukać wiele ID naraz
             params = {"filter": {"@ID": chunk}, "select": ["ID", "PHONE"]}
-            res = bitrix_call(BitrixConfig.WEBHOOK_URL, "crm.contact.list.json", params)
+            res = bitrix_call(BitrixConfig.NEW_WEBHOOK_URL, "crm.contact.list.json", params)
 
             for contact in res.get("result", []):
                 phone_str = flatten_multifield(contact.get("PHONE"))
@@ -1232,7 +1232,7 @@ def enrich_deals_with_phones(deals_list):
         for i in range(0, len(comp_list), 50):
             chunk = comp_list[i:i + 50]
             params = {"filter": {"@ID": chunk}, "select": ["ID", "PHONE"]}
-            res = bitrix_call(BitrixConfig.WEBHOOK_URL, "crm.company.list.json", params)
+            res = bitrix_call(BitrixConfig.NEW_WEBHOOK_URL, "crm.company.list.json", params)
 
             for company in res.get("result", []):
                 phone_str = flatten_multifield(company.get("PHONE"))
@@ -1352,7 +1352,7 @@ def find_owner_by_incoming_sms_old(mongo_uri, db_name, collection_name):
 
     # Używamy Twojej funkcji bitrix_call (zakładam, że jest dostępna w scope)
     # Jeśli nie, podmień BitrixConfig.WEBHOOK_URL na swój URL
-    result = bitrix_call(BitrixConfig.WEBHOOK_URL, "crm.activity.list.json", params)
+    result = bitrix_call(BitrixConfig.NEW_WEBHOOK_URL, "crm.activity.list.json", params)
 
     if "error" in result:
         print(f"❌ Błąd API Bitrix: {result}")
@@ -1418,7 +1418,7 @@ def find_owner_by_incoming_sms(phone_number): #used in actual API when receiving
         "select": ["ID", "OWNER_ID", "OWNER_TYPE_ID", "SETTINGS", "SUBJECT", "RESPONSIBLE_ID"]
     }
 
-    result = bitrix_call(BitrixConfig.WEBHOOK_URL, "crm.activity.list.json", params)
+    result = bitrix_call(BitrixConfig.NEW_WEBHOOK_URL, "crm.activity.list.json", params)
 
     if "error" in result:
         print(f"❌ Błąd API Bitrix: {result}")
@@ -1586,7 +1586,8 @@ def main():
 
     elif choice == "13":
         # Możesz zmienić datę poniżej na dowolną inną
-        TARGET_DATE = "2025-12-15T00:00:00+03:00"
+        TARGET_DATE = "2024-12-15T00:00:00+03:00"
+        #TARGET_DATE = "2026-03-20T00:00:00+03:00"
         process_deals_separate_csv_from_date(TARGET_DATE)
 
     elif choice == "14":
