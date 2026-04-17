@@ -1458,6 +1458,60 @@ def find_owner_by_incoming_sms(phone_number): #used in actual API when receiving
     print("⚠️ Nie znaleziono w Bitrix aktywności SMS wysłanej na ten numer telefonu.")
     return None
 
+
+def add_external_call_with_recording(phone_number, user_id, record_url, duration=60, entity_type=None, entity_id=None):
+    """
+    Rejestruje połączenie i podpina pod nie link do nagrania.
+    Jeśli podano entity_type i entity_id, przypisuje nagranie do konkretnego rekordu.
+    W przeciwnym razie Bitrix szuka po numerze telefonu lub tworzy nowy Lead.
+    """
+    print(f"--- PROCESOWANIE NAGRANIA DLA: {phone_number} ---")
+
+    reg_params = {
+        "USER_ID": user_id,
+        "PHONE_NUMBER": phone_number,
+        "TYPE": 2,
+        "SHOW": 0
+    }
+
+    # Jeśli przekazaliśmy konkretne ID z zewnątrz:
+    if entity_type and entity_id:
+        reg_params["CRM_CREATE"] = 0
+        reg_params["CRM_ENTITY_TYPE"] = entity_type
+        reg_params["CRM_ENTITY_ID"] = entity_id
+        print(f"📌 Wymuszono przypisanie do: {entity_type} [{entity_id}]")
+    else:
+        # Domyślne zachowanie (szukaj lub twórz)
+        reg_params["CRM_CREATE"] = 1
+
+    reg_result = bitrix_call(BitrixConfig.AUTOBOT_WEBHOOK, "telephony.externalcall.register", reg_params)
+
+    if "result" in reg_result:
+        call_id = reg_result["result"]["CALL_ID"]
+        crm_entity_id = reg_result["result"].get("CRM_ENTITY_ID")
+        print(f"✅ Połączenie zarejestrowane. CALL_ID: {call_id}, Lead/Entity ID: {crm_entity_id}")
+
+        # KROK 2: Zakończenie połączenia i wysłanie linku do nagrania
+        # Bitrix pobierze plik z RECORD_URL i umieści go na swoim serwerze/dysku
+        finish_params = {
+            "CALL_ID": call_id,
+            "USER_ID": user_id,
+            "DURATION": duration,  # Długość w sekundach
+            "RECORD_URL": record_url  # KLUCZOWE: Bezpośredni link do pliku .mp3 / .wav
+        }
+
+        finish_result = bitrix_call(BitrixConfig.AUTOBOT_WEBHOOK, "telephony.externalcall.finish", finish_params)
+
+        if "result" in finish_result:
+            print("✅ Nagranie zostało pomyślnie przekazane do Bitrix24.")
+        else:
+            print("❌ Błąd podczas przesyłania nagrania:", finish_result)
+
+        return finish_result
+    else:
+        print("❌ Błąd rejestracji połączenia:", reg_result)
+        return reg_result
+
 # --- MAIN ---
 
 def main():
@@ -1476,6 +1530,7 @@ def main():
     print("12. Pobierz owner id itd")
     print("13. Pobierz DEALE do OSOBNYCH CSV od wybranej daty")
     print("14. lead")
+    print("15. Test Metody 2: Nagranie z zewnętrznego linku (Telefonia)")  #
 
     choice = input("Wybierz opcję (1/13): ").strip()
 
@@ -1597,6 +1652,22 @@ def main():
             phone="696969123",
             contact_id=20393,
             assigned_by_id=161,
+        )
+
+    elif choice == "15":
+        # DANE TESTOWE
+        TEST_PHONE = "888 788 525"
+        TEST_USER_ID = 173  # Używam ID z Twojego przykładu add_new_lead
+        # WAŻNE: Link musi być bezpośredni i publicznie dostępny dla serwera Bitrix
+        TEST_RECORD_URL = ""
+
+        add_external_call_with_recording(
+            phone_number=TEST_PHONE, #Phone
+            user_id=TEST_USER_ID, #Responsible
+            record_url=TEST_RECORD_URL, #link
+            duration=45, #useless
+            entity_type="LEAD", #find out if lead or deal
+            entity_id=20897 #id of lead/deal
         )
 
     else:
