@@ -1189,6 +1189,65 @@ def fetch_deals_by_category_with_date(category_id, category_name, start_date_iso
     print(f"   Zakończono kategorię {category_id}. Pobrano łącznie: {total_fetched} dealów.")
     return deals
 
+def fetch_leads():
+    """
+    Pobiera wszystkie leady z CRM.
+    Leady w Bitrix24 nie mają kategorii/lejków, więc pobieramy je bezpośrednio.
+    """
+    print("🔍 Pobieranie leadów...")
+
+    leads = []
+    start = 0
+    total_fetched = 0
+
+    while True:
+        params = {
+            "order": {"ID": "ASC"},
+            "filter": {},
+            "select": ["*", "UF_*"],  # Pobieramy wszystkie pola standardowe i customowe
+            "start": start
+        }
+
+        r = bitrix_call(BitrixConfig.NEW_WEBHOOK_URL, "crm.lead.list.json", params)
+
+        if "error" in r:
+            print(f"❌ Błąd pobierania leadów: {r}")
+            break
+
+        batch = r.get("result", [])
+        if not batch:
+            break
+
+        leads.extend(batch)
+
+        batch_count = len(batch)
+        print("Działam")
+        total_fetched += batch_count
+
+        if "next" in r:
+            start = r["next"]
+        else:
+            break
+
+    print(f"✅ Pobrano łącznie {total_fetched} leadów.")
+    return leads
+
+
+def process_all_leads(output_file):
+    """
+    1. Pobiera wszystkie leady.
+    2. Zapisuje do pliku CSV.
+    """
+    all_leads = fetch_leads()
+
+    print(f"\n📊 Podsumowanie: Pobrano łącznie {len(all_leads)} leadów.")
+
+    if all_leads:
+        all_leads = generate_custom_signatures(all_leads)
+        save_to_csv(output_file, all_leads)
+    else:
+        print("Brak leadów do zapisania.")
+
 
 def enrich_deals_with_phones(deals_list):
     """
@@ -1531,6 +1590,7 @@ def main():
     print("13. Pobierz DEALE do OSOBNYCH CSV od wybranej daty")
     print("14. lead")
     print("15. Test Metody 2: Nagranie z zewnętrznego linku (Telefonia)")  #
+    print("16. Pobierz LEADY według kategorii do CSV")
 
     choice = input("Wybierz opcję (1/13): ").strip()
 
@@ -1669,6 +1729,10 @@ def main():
             entity_type="LEAD", #find out if lead or deal
             entity_id=21849 #id of lead/deal edytowany
         )
+
+    elif choice == "16":
+        output_file = "leads_full_export.csv"
+        process_all_leads(output_file)
 
     else:
         print("Nieprawidłowy wybór.")
